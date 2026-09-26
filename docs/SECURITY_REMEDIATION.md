@@ -117,8 +117,29 @@ Scanned the whole tree **and** the staged file set for: JWT payload signatures, 
 | `apps/api/tests/test_billing.py:155`; `apps/api/tests/integration/test_postgres_spec_remainder.py:191,196,205,218,219`; `apps/api/tests/integration/test_postgres_payments.py:564`; `apps/web/src/tests/checkout.test.tsx:100,254`; `apps/web/src/tests/adminConsole.test.tsx:877,891` | `rzp_test_…` literals | **Intentional fake fixtures** | Retained |
 | `.github/workflows/ci-cd.yml:214` | `sb_publishable_…` build-time value | Public by design (the browser bundle needs it) | Retained, noted |
 | `docs/TEST_BASELINE.md:92` | `sb_publishable_…` inside a documented command | Public by design, but docs should be placeholder-only | **REMEDIATED** → `sb_publishable_<publishable-key>` |
+| `.env.example:43`, `.github/workflows/ci-cd.yml:59,148`, `apps/api/app/core/config.py:64`, `apps/api/tests/test_db_urls.py:21`, `apps/docs/api/openapi.json:2846` | `postgresql://<user>:<password>@` carrying the **local development role's password** | Not a secret: a localhost-only convention (§5.1) | Documented; exempted by the scanner **with a written reason**, and only when the host is `localhost`/`127.0.0.1` |
 
-**Real credentials found in tracked files: none.**
+### 5.1 The local development database credential
+
+Found only on the second pass, and only because the live-value check is content-based rather than
+pattern-based. The local development PostgreSQL role's password is **also the role name** and is part
+of the standard one-command setup, so it appears as the DSN's password segment in the files listed
+above. It grants nothing on any host but the developer's own machine:
+
+* the role is created by the local setup path, not by a migration or a deploy;
+* the DSNs are `localhost` / `127.0.0.1` only, including in CI, where it addresses a
+  service container on the runner itself;
+* in the hosted environments the value is injected from the platform's environment store
+  (`infra/render.yaml` declares the key with `sync: false`), never from a repository file.
+
+It is **reported and exempted**, not silently dropped: `scripts/check_secrets.py` prints the file and
+line it skipped and why, and a DSN whose host is anything other than `localhost`/`127.0.0.1` is
+treated as a failure even if the password is identical. Rotating it is a developer-machine concern,
+not a security incident; the corresponding hosted credential is tracked separately as **C-3**.
+
+**Real credentials found in tracked files: none.** The only password-shaped string is the local-only
+one above, and the only key-shaped strings are the fake fixtures and the public-by-design publishable
+key enumerated in this table.
 
 ---
 
@@ -134,6 +155,8 @@ Scanned the whole tree **and** the staged file set for: JWT payload signatures, 
 | R-6 | Verified ignore coverage for every env file variant, cache, build artefact and OS file | `.gitignore`, `apps/web/.gitignore` | §3 |
 | R-7 | Repo-wide + staged-file secret scans | — | §5; produced the audit trail used for the first commit |
 | R-8 | Re-ran the full backend suite and repaired the regression R-2 introduced | — | The first attempt broke an existing infrastructure guard; see below |
+| R-9 | Added a committed, runnable scanner (`HEAD` / `--rev` / `--staged` / `--worktree`, non-zero exit on any unexplained match) | `scripts/check_secrets.py` | Turns the one-off scans of R-7 into a repeatable gate; P0-3 asks for a scanner, not just a scan. Validated by a negative control — a planted real-shaped key **and** a planted remote DSN both failed it, exit 1 |
+| R-10 | Extended the live-value harvest to `DATABASE_URL` / `DIRECT_DATABASE_URL` password segments | `scripts/check_secrets.py` | The first pass harvested only `SECRET`/`PASSWORD`/`TOKEN`/`API_KEY`-style keys, so a DSN password was invisible to it — the omission that hid the local-dev credential of §5.1 |
 
 **Change-control note (R-2/R-8).** The initial redaction used `<your-project-ref>.supabase.co`,
 which is *not* in `PLACEHOLDER_HOSTS`. The verification gate caught it:
