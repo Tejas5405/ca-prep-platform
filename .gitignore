@@ -1,0 +1,106 @@
+# ============================================================================
+# CA Prep Platform - ignore rules
+#
+# THE .env RULES BELOW ARE THE MOST IMPORTANT LINES IN THIS FILE.
+#
+# This repository has no committed secrets, and the way that stays true is that
+# no `.env` file is ever tracked. A backend `.env` holds DATABASE_URL (with a
+# password) and SUPABASE_SECRET_KEY (which is Postgres service_role with
+# BYPASSRLS, so it reads and writes every row and every storage object in the
+# project). Either in git history is a permanent compromise: deleting the file
+# later does not remove it from history.
+#
+# `.env.example` files are templates with placeholder values and MUST be
+# tracked - hence the negation after the wildcard.
+# ============================================================================
+
+# ---- environment files -----------------------------------------------------
+.env
+.env.*
+# Local overrides for tooling that supports them (Vite reads .env.local).
+*.local
+# The negation must come AFTER the wildcards, or git applies them in the other
+# order and the templates are ignored too.
+!.env.example
+
+# Private keys, in case a PEM is ever generated inside the working tree. The local
+# development auth key lives in the temp directory, not here, but a rule costs
+# nothing and a committed key costs everything.
+*.pem
+*.key
+
+# ---- python ----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+dist-preview/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Testing and type checking
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.tox/
+.nox/
+
+# ---- node -----------------------------------------------------------------
+node_modules/
+.pnpm-store/
+.yarn/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---- build output ---------------------------------------------------------
+dist/
+build/
+out/
+.next/
+.nuxt/
+.svelte-kit/
+.vite/
+.turbo/
+*.tsbuildinfo
+
+# ---- editors and OS -------------------------------------------------------
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ---- logs and local artefacts ---------------------------------------------
+*.log
+logs/
+tmp/
+scratch/
+
+# ---- local database volumes -----------------------------------------------
+# Created by docker compose; contains real data if it has been used locally.
+.docker-data/
+pgdata/
+
+# ============================================================================
+# EXPLICITLY TRACKED (listed for the reader, not needed by git)
+#
+#   *.env.example          templates, placeholder values only
+#   infra/render.yaml      no secret VALUES - secrets use `sync: false`, which
+#                          makes Render read them from its dashboard
+# ============================================================================

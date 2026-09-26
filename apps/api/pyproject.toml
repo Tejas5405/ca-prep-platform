@@ -1,0 +1,122 @@
+[project]
+name = "caprep-api"
+version = "3.0.0"
+description = "CA Prep Platform API - FastAPI, PostgreSQL, Redis, RQ"
+requires-python = ">=3.12"
+
+# ============================================================================
+# Ruff configuration.
+#
+# The rule set is deliberately close to strict. The superseded TypeScript
+# codebase had ~40% of its defects in two categories that a linter catches
+# mechanically: unused/undefined names, and bare except clauses that swallowed
+# errors. BLE001 below is the direct equivalent of that second one.
+# ============================================================================
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["app", "tests", "alembic"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes - undefined names, unused imports
+    "I",    # isort
+    "B",    # flake8-bugbear - mutable default args, etc.
+    "C4",   # comprehensions
+    "UP",   # pyupgrade
+    "S",    # flake8-bandit - security
+    "BLE001",  # flake8-blind-except: every except must name its exception or justify itself
+    "A",    # builtin shadowing
+    "T201",  # no print() left in library code
+    "PT011",  # pytest: too-broad raises
+    "SIM102",  # collapsible if
+    "RUF012",  # ClassVar annotation
+    "RUF",
+]
+ignore = [
+    # FastAPI and Pydantic depend on runtime type annotations; TC rules would
+    # move imports behind TYPE_CHECKING and break the app at import time.
+    "TC001", "TC002", "TC003",
+    # assert is used in tests and in internal invariants.
+    "S101",
+    # Hardcoded test passwords / dummy credentials are intentional in tests.
+    "S105", "S106", "S107",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# S603: the integration tests shell out to `alembic` with a fixed argv list and
+#   no shell, to check the schema the way a deploy does. There is no untrusted
+#   input in that call - the rule exists for `subprocess(shell=True, user_input)`.
+"tests/*" = ["S101", "PT011", "PT012", "S603"]
+"alembic/versions/*" = ["E501", "S608"]
+"app/models/*" = ["A003"]   # `type` column names shadow a builtin intentionally
+# The campus router is a long sequence of the same response shape. Wrapping every
+# call to 100 columns makes the file harder to read than the limit is worth.
+"app/api/v1/campus.py" = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's Depends()/Query()/Header() defaults are idiomatic, not the
+# mutable-default bug B008 is designed to catch. `require_role` is our own
+# dependency FACTORY: it returns a fresh dependency callable on every use and
+# holds no shared state, so evaluating it in a default argument is correct and is
+# the documented FastAPI pattern for per-route role guards.
+#
+# Declared here rather than as per-line noqa so the exemption is visible in one
+# place and a reader can judge it once.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Header",
+    "fastapi.Path",
+    "app.core.security.require_role",
+    # Same shape as require_role: a dependency FACTORY whose call happens once at
+    # import time, not per request. Ruff cannot tell the two apart, and the
+    # alternative - a module-level singleton per route - is how a route ends up
+    # sharing a closure with a different permission.
+    "app.core.permissions.require_permission",
+]
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = false
+disallow_untyped_defs = false
+check_untyped_defs = true
+ignore_missing_imports = true
+# Start permissive and tighten module by module. A strict baseline switched on
+# over an existing codebase produces a wall of errors nobody reads.
+plugins = []
+
+[[tool.mypy.overrides]]
+module = ["app.services.*", "app.core.security", "app.core.envelope"]
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+# See pytest.ini for why this marker is registered.
+markers = ["postgres: requires a live PostgreSQL (see tests/integration)"]
+filterwarnings = [
+    "error::DeprecationWarning:app.*",
+]
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["app/workers/*", "alembic/*"]
+
+[tool.coverage.report]
+# The API layer and services must stay covered. Workers are excluded above
+# because they are exercised end-to-end in staging, not in unit tests.
+fail_under = 80
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]

@@ -1,0 +1,214 @@
+name: CI
+
+# Runs on every push and PR. Deliberately fast: no Docker build, no E2E browser
+# tests. Those belong to a separate workflow so a routine PR does not wait on
+# them, and so a flaky browser test does not block a backend fix.
+#
+# STACK (blueprint v3): React + TS | FastAPI | PostgreSQL | Redis + RQ.
+# The previous version of this file ran a Node API, a NestJS lint job and a
+# Prisma migration check. All three are retired; see _archive_v2_nestjs_stack/.
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  # Cancel superseded runs on the same ref. Without this, a push to a busy PR
+  # leaves several redundant jobs competing for runners.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  api:
+    name: API (lint, typecheck, test)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: caprep
+          POSTGRES_PASSWORD: caprep
+          POSTGRES_DB: caprep_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U caprep -d caprep_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    defaults:
+      run:
+        working-directory: apps/api
+
+    env:
+      ENVIRONMENT: test
+      DATABASE_URL: postgresql+psycopg://caprep:caprep@localhost:5432/caprep_test
+      REDIS_URL: redis://localhost:6379
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: apps/api/requirements*.txt
+
+      - name: Install system dependencies
+        # Needed by the OCR tests. pdf2image shells out to pdftoppm and
+        # pytesseract shells out to tesseract; pip installing the Python
+        # packages alone leaves both missing, and those tests would skip
+        # silently in CI - which is worse than failing, because it looks green.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            tesseract-ocr tesseract-ocr-eng poppler-utils
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: ruff check app tests alembic
+
+      - name: Format check
+        run: ruff format --check app tests alembic
+
+      - name: Type check (mypy)
+        run: mypy app
+        continue-on-error: true   # advisory while the strict baseline is adopted
+
+      - name: Apply migrations
+        # Proves the migration chain runs from empty, which a "models import
+        # fine" check does not.
+        run: alembic upgrade head
+
+      - name: Check for model/migration drift
+        # Autogenerate should produce an EMPTY migration if the models and the
+        # migrations agree. A non-empty diff means someone changed a model and
+        # forgot the migration - the failure mode that ships a broken deploy.
+        run: |
+          alembic revision --autogenerate -m "drift check" --rev-id driftcheck
+          if grep -qE "op\.(create_table|drop_table|add_column|drop_column|alter_column)" \
+               alembic/versions/*driftcheck*.py; then
+            echo "::error::Models and migrations have drifted. Regenerate the migration."
+            grep -E "op\.(create_table|drop_table|add_column|drop_column|alter_column)" \
+              alembic/versions/*driftcheck*.py
+            exit 1
+          fi
+
+      - name: Test with coverage
+        run: pytest --cov=app --cov-report=term-missing --cov-report=xml
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-coverage
+          path: apps/api/coverage.xml
+          if-no-files-found: ignore
+
+  migrations-are-reversible:
+    name: Migrations are reversible
+    runs-on: ubuntu-latest
+    needs: api
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: caprep
+          POSTGRES_PASSWORD: caprep
+          POSTGRES_DB: caprep_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U caprep -d caprep_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+    defaults:
+      run:
+        working-directory: apps/api
+
+    env:
+      DATABASE_URL: postgresql+psycopg://caprep:caprep@localhost:5432/caprep_test
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: apps/api/requirements*.txt
+
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Upgrade then downgrade
+        # A downgrade path that has never been executed is not a downgrade path.
+        # This catches the common case of a migration that drops a column on the
+        # way up but cannot restore it on the way down.
+        run: |
+          alembic upgrade head
+          alembic downgrade base
+          alembic upgrade head
+
+  web:
+    name: Web (lint, typecheck, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # Must match .nvmrc and Vercel's build image. Several frontend
+          # packages are pinned specifically for Node 20 compatibility - see
+          # docs/architecture/stack-amendments.md (SA-07).
+          node-version: "20.19.0"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        # `tsc -b && vite build`. A build failure here is the same failure
+        # Vercel would hit, so it is caught before the deploy rather than after.
+        run: npm run build
+        env:
+          # Build-time placeholders. Vite INLINES VITE_ variables into the
+          # bundle, so a build with these unset would bake in `undefined` and
+          # the app would throw on load. Real values are set in Vercel.
+          # Both are inlined by Vite. The URL must be a REAL https origin: the
+          # Supabase client validates it when it initialises, so a placeholder
+          # host makes the module throw on import - which the preview and the
+          # infra tests would see as a build that succeeded and an app that
+          # cannot start. The publishable key is a non-secret, and the values
+          # here only ever reach a throwaway CI build.
+          VITE_SUPABASE_URL: https://zyrmlnpvylhcpyaoizyz.supabase.co
+          VITE_SUPABASE_ANON_KEY: sb_publishable_ci_placeholder

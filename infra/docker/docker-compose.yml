@@ -1,0 +1,81 @@
+# Local development services.
+#
+#   docker compose -f infra/docker/docker-compose.yml up -d
+#
+# SCOPE: PostgreSQL and Redis only.
+#
+# The API and worker are NOT containerised for local development. Running them
+# with uvicorn and `python -m app.workers.rq_worker` directly gives hot reload
+# and a working debugger; a container adds a rebuild cycle for no benefit while
+# only two people are developing. Production images are built by Render from
+# apps/api/Dockerfile.
+#
+# The superseded version of this file also ran a Node API container and a
+# separate Python OCR service. Both are gone: v3 puts ingestion in an RQ worker
+# inside the same Python service, which removes the cross-language HTTP hop that
+# used to exist between the API and the OCR service.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: caprep-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: caprep
+      POSTGRES_PASSWORD: caprep
+      POSTGRES_DB: caprep
+      # Deterministic collation. Without this, ORDER BY on text can differ
+      # between a developer's machine and CI, which produces tests that pass
+      # locally and fail in the pipeline.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      - "5432:5432"
+    volumes:
+      - caprep-pgdata:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # The API's /health/db and the CI job both wait on this. -U/-d are required:
+      # a bare pg_isready reports "accepting connections" for the maintenance
+      # database even when the application database failed to create.
+      test: ["CMD-SHELL", "pg_isready -U caprep -d caprep"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: caprep-redis
+    restart: unless-stopped
+    # maxmemory-policy=noeviction is deliberate, and it is a TRADE-OFF.
+    #
+    # Redis holds both evictable data (cache, rate-limit counters) and
+    # non-evictable data (queued RQ jobs). Under allkeys-lru a memory spike
+    # quietly discards queued ingestion jobs - the API still returns 200 for
+    # "job accepted" and the upload never gets processed. Losing a student's
+    # upload silently is worse than a loud write failure.
+    #
+    # With noeviction, writes fail loudly once maxmemory is reached, and the
+    # cache keeps itself small through application-level TTLs (30-60m on
+    # question rows, 5-15m on leaderboards) rather than relying on eviction.
+    # PRODUCTION NOTE: point REDIS_URL at a managed Redis with persistence and
+    # an eviction policy per instance; do not share one instance between the
+    # job queue and the cache once traffic justifies splitting them.
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy noeviction
+    ports:
+      - "6379:6379"
+    volumes:
+      - caprep-redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  caprep-pgdata:
+  caprep-redisdata:

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="CA Prep — question bank, mock exams and a dated study plan for CA students">
+  <rect width="1200" height="630" fill="#0f172a"/>
+  <g transform="translate(80 84)">
+    <rect x="0.75" y="0.75" width="60.5" height="60.5" rx="15" fill="#2f6bd8"/>
+    <path d="M20 43V21h8c6 0 9.7 4.2 9.7 11S34 43 28 43h-8Z" fill="#ffffff"/>
+    <path d="M43 21h3.5l-6.5 22h-3.5L43 21Z" fill="#dbe7fb"/>
+    <text x="82" y="44" font-family="Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="34" font-weight="600" fill="#ffffff">CA Prep</text>
+  </g>
+  <text x="80" y="290" font-family="Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="64" font-weight="600" fill="#ffffff">Your CA attempt,</text>
+  <text x="80" y="370" font-family="Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="64" font-weight="600" fill="#ffffff">planned to the day.</text>
+  <text x="80" y="440" font-family="Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="28" fill="#94a3b8">Question bank from ICAI past papers · timed mocks · revision</text>
+  <text x="80" y="486" font-family="Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="28" fill="#94a3b8">scheduling · a study plan that re-plans when your week does.</text>
+  <g font-family="Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="24">
+    <rect x="80" y="530" width="272" height="52" rx="8" fill="#2f6bd8"/>
+    <text x="216" y="563" fill="#ffffff" text-anchor="middle">Foundation · Inter · Final</text>
+    <rect x="368" y="530" width="330" height="52" rx="8" fill="none" stroke="#334155"/>
+    <text x="533" y="563" fill="#cbd5e1" text-anchor="middle">Human-reviewed before publishing</text>
+  </g>
+  <text x="1120" y="600" font-family="Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="20" fill="#64748b" text-anchor="end">caprep.in</text>
+</svg>

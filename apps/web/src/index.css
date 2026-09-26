@@ -1,0 +1,44 @@
+@import 'tailwindcss';
+
+/*
+ * Tailwind v4 is configured in CSS, not in a tailwind.config.js. Theme values
+ * declared in the @theme block become utility classes automatically.
+ *
+ * The palette is intentionally restrained. A study tool is read for hours at a
+ * time, so the interface uses a neutral surface with a single accent rather than
+ * the saturated colours typical of consumer apps — and semantic colours are
+ * reserved for correctness feedback (right/wrong), where colour carries meaning
+ * a student must not misread.
+ */
+@theme {
+  --color-brand-50: oklch(0.97 0.02 250);
+  --color-brand-100: oklch(0.93 0.04 250);
+  --color-brand-500: oklch(0.62 0.16 250);
+  --color-brand-600: oklch(0.54 0.17 250);
+  --color-brand-700: oklch(0.46 0.15 250);
+
+  --color-correct-500: oklch(0.72 0.17 150);
+  --color-correct-50: oklch(0.96 0.03 150);
+  --color-wrong-500: oklch(0.63 0.20 25);
+  --color-wrong-50: oklch(0.96 0.03 25);
+
+  /*
+   * Inter is not loaded - no webfont is requested anywhere, deliberately: a
+   * third-party font request costs a round trip to a domain outside the stack and
+   * degrades to Times New Roman if it fails. Inter is named first so that
+   * self-hosting it later is a one-line change, but the type that actually
+   * renders today is the platform UI font, and it is supposed to look like that.
+   */
+  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+}
+
+/* Respect the OS reduced-motion setting. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

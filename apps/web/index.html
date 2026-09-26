@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en-IN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <!--
+      DEFAULT METADATA, and it is not a formality.
+
+      This is a single-page app: every route is served from this one file, so these
+      tags are what a crawler that does NOT execute JavaScript reads, and what a
+      link-scraper uses if it cannot run the app. The per-route titles and
+      descriptions are applied at runtime by `components/public/Seo.tsx`; these are
+      the floor beneath it, and they describe the product accurately rather than
+      saying "React App".
+    -->
+    <title>CA Prep — practice, mock exams and a dated study plan for CA students</title>
+    <meta
+      name="description"
+      content="A question bank built from ICAI past papers, chapter-wise practice, timed mock exams, spaced revision and a study plan that re-plans when your week does. Foundation, Intermediate and Final."
+    />
+    <meta name="theme-color" content="#0f172a" />
+    <meta name="color-scheme" content="light" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="canonical" href="https://caprep.in/" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="CA Prep" />
+    <meta property="og:locale" content="en_IN" />
+    <meta property="og:url" content="https://caprep.in/" />
+    <meta property="og:title" content="CA Prep — practice, mock exams and a dated study plan for CA students" />
+    <meta
+      property="og:description"
+      content="A question bank built from ICAI past papers, chapter-wise practice, timed mock exams, spaced revision and a study plan that re-plans when your week does."
+    />
+    <meta property="og:image" content="https://caprep.in/og.svg" />
+    <meta property="og:image:alt" content="CA Prep — question bank, mock exams and a dated study plan for CA students" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="CA Prep — practice, mock exams and a dated study plan" />
+    <meta
+      name="twitter:description"
+      content="Question bank from ICAI past papers, timed mocks, spaced revision and a study plan that re-plans when your week does."
+    />
+    <meta name="twitter:image" content="https://caprep.in/og.svg" />
+
+    <!--
+      No third-party font, script or style is requested here. The page renders on a
+      cold start with no external round trip, which is what keeps the largest
+      contentful paint on the landing page comfortably inside the 2.5s budget it
+      was designed for.
+    -->
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

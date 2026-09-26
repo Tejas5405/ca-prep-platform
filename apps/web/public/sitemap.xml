@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The public routes only. Everything behind sign-in is excluded deliberately: a
+  crawler cannot render it, and a search result pointing at a login wall is a
+  worse outcome than no result at all.
+-->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://caprep.in/</loc><changefreq>weekly</changefreq><priority>1.0</priority></url>
+  <url><loc>https://caprep.in/features</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>
+  <url><loc>https://caprep.in/pricing</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>
+  <url><loc>https://caprep.in/faq</loc><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://caprep.in/privacy</loc><changefreq>yearly</changefreq><priority>0.3</priority></url>
+  <url><loc>https://caprep.in/terms</loc><changefreq>yearly</changefreq><priority>0.3</priority></url>
+  <url><loc>https://caprep.in/signup</loc><changefreq>yearly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://caprep.in/login</loc><changefreq>yearly</changefreq><priority>0.4</priority></url>
+</urlset>

@@ -1,0 +1,161 @@
+# Render blueprint: FastAPI API service + RQ background worker.
+#
+# Deploy with: Render Dashboard -> New -> Blueprint -> point at this repo.
+#
+# ============================================================================
+# THE ONE THING TO GET RIGHT IN THIS FILE
+# ============================================================================
+# SUPABASE_URL is a literal on both services, and it must equal the frontend's
+# VITE_SUPABASE_URL and the project inside DATABASE_URL. The API verifies the
+# issuer of every access token against it, so a drifted value means sign-in
+# succeeds and every API call returns 401.
+
+# The RQ worker is a `type: worker`, NOT a `type: web`. An RQ worker process
+# never opens an HTTP port, so Render's health check on a Web Service would
+# probe a port that does not exist, wait out the full timeout and fail the
+# deploy. The error message ("no open ports detected") does not mention RQ, so
+# this is a slow failure to diagnose from scratch.
+#
+# ============================================================================
+# MIGRATIONS
+# ============================================================================
+# `preDeployCommand` runs `alembic upgrade head` before the new instance takes
+# traffic. Render runs it once per deploy, which avoids the common mistake of
+# running migrations in the app's startup path - with more than one instance
+# that races, and multiple workers would each try to apply the same revision.
+#
+# A migration failure aborts the deploy and leaves the previous version serving.
+# That is the desired behaviour: a failed migration must not become a live
+# half-migrated schema.
+
+services:
+  # ------------------------------------------------------------------ API ---
+  - type: web
+    name: caprep-api
+    runtime: python
+    plan: starter
+    region: singapore          # closest Render region to the primary market
+    rootDir: apps/api
+    buildCommand: |
+      pip install --upgrade pip
+      pip install -r requirements.txt
+    preDeployCommand: alembic upgrade head
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 2
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: PYTHON_VERSION
+        value: "3.12.6"
+      # sync: false means Render prompts for the value and never stores it in git.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: caprep-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: caprep-redis
+          type: redis
+          property: connectionString
+      # SUPABASE_URL is the value that makes issuer and audience verification
+      # meaningful: a token minted for another Supabase project is signed by that
+      # project's key, and the API checks `iss` against this URL, so a foreign token
+      # cannot be replayed here.
+      #
+      # Not a secret - the project URL is public and ships in the browser bundle.
+      # Set as a literal so it cannot drift from the frontend: a mismatch means the
+      # API rejects every token, and the symptom is identical to an attack.
+      - key: SUPABASE_URL
+        value: https://zyrmlnpvylhcpyaoizyz.supabase.co
+      # The secret key: server-side ONLY. It is Postgres service_role with
+      # BYPASSRLS, and this platform brokers storage with it. Rotate any value that
+      # has ever been pasted into a chat, ticket or screenshot.
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      # Mints and verifies signed URLs, both buckets.
+      - key: STORAGE_BUCKET
+        value: question-pdfs
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      # Explicit allow-list. The app refuses to boot in production if this is
+      # empty or contains "*".
+      - key: CORS_ORIGINS
+        sync: false
+
+  # --------------------------------------------------------------- worker ---
+  # Docker runtime, NOT the native Python runtime.
+  #
+  # The OCR fallback (blueprint v3 §11.2) shells out to two SYSTEM binaries:
+  # tesseract-ocr and poppler-utils (pdftoppm). Neither ships with Render's
+  # native Python runtime, and `pip install pytesseract pdf2image` succeeds
+  # without them - the failure only appears at runtime, on the first scanned PDF.
+  #
+  # Worse, it would not even look like a failure: the pipeline contains an OCR
+  # error and keeps the text-layer extraction, so scanned papers would quietly
+  # produce zero drafts with no error on the job. The worker would appear
+  # healthy while a whole class of uploads went nowhere.
+  #
+  # apps/api/Dockerfile installs both binaries and tesseract-ocr-eng.
+  - type: worker
+    name: caprep-worker
+    runtime: docker
+    dockerfilePath: ./apps/api/Dockerfile
+    dockerContext: ./apps/api
+    plan: starter
+    region: singapore
+    # Overrides the image's default CMD (uvicorn), which is the API.
+    startCommand: python -m app.workers.rq_worker
+    autoDeploy: true
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: PYTHON_VERSION
+        value: "3.12.6"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: caprep-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: caprep-redis
+          type: redis
+          property: connectionString
+      # The worker authenticates to storage with the same secret key as the API.
+      # It never verifies a user token, but it does download the PDF it is asked to
+      # process, so it needs storage access of its own.
+      - key: SUPABASE_URL
+        value: https://zyrmlnpvylhcpyaoizyz.supabase.co
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: STORAGE_BUCKET
+        value: question-pdfs
+      # OCR runs on this service, so the system Tesseract binary and Poppler
+      # (for pdf2image) must be present in the image. See apps/api/Dockerfile.
+
+databases:
+  - name: caprep-postgres
+    plan: basic-256mb
+    region: singapore
+    postgresMajorVersion: "16"
+    # Render takes daily snapshots. Verify the retention window against the
+    # blueprint's backup requirement before go-live, and TEST A RESTORE -
+    # an untested backup is not a backup.
+
+  # ----------------------------------------------------------------- redis ---
+  # Declared here for completeness; create it in the dashboard or uncomment if
+  # your Render plan supports Redis in Blueprints.
+  #
+  # - name: caprep-redis
+  #   type: redis
+  #   plan: starter
+  #   region: singapore
+  #   maxmemoryPolicy: noeviction

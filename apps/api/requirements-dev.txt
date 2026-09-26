@@ -1,0 +1,21 @@
+# Development and CI dependencies. Not installed in the production image.
+-r requirements.txt
+
+pytest==9.1.1
+pytest-asyncio==1.3.0
+# The async driver tests/integration/_db.py builds its engine with
+# (postgresql+asyncpg://). It is a TEST dependency because the application itself
+# talks to PostgreSQL through psycopg; without it declared here the whole
+# database suite skipped silently and reported green - see the fixture in
+# tests/integration/conftest.py that now refuses to let that happen again.
+asyncpg==0.30.0
+pytest-cov==7.0.0
+# An in-process Redis for tests/test_queue_boundary.py. The bug it guards against
+# (a dict passed where RQ wants a Retry) happened INSIDE RQ's job construction, so a
+# mocked Queue would accept it and prove nothing - the test needs real RQ behaviour
+# over real Redis semantics.
+fakeredis==2.38.0
+ruff==0.14.5
+mypy==1.19.0
+# Freezes the resolved dependency tree for reproducible CI runs.
+pip-tools==7.6.0

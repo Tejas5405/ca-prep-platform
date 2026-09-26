@@ -1,0 +1,34 @@
+# CA Prep
+#
+# Public pages may be indexed. The application behind sign-in and the content
+# team's surface may not: they render nothing useful to a crawler, and an indexed
+# /admin is an invitation.
+User-agent: *
+Allow: /
+Disallow: /dashboard
+Disallow: /learn
+Disallow: /practice
+Disallow: /revision
+Disallow: /mocks
+Disallow: /progress
+Disallow: /planner
+Disallow: /doubts
+Disallow: /search
+Disallow: /profile
+Disallow: /subscription
+Disallow: /reports
+Disallow: /admin
+Disallow: /auth/callback
+
+# Public pages worth crawling, listed explicitly so the sitemap and this file
+# cannot drift into disagreeing about what is public.
+Allow: /$
+Allow: /features
+Allow: /pricing
+Allow: /faq
+Allow: /privacy
+Allow: /terms
+Allow: /login
+Allow: /signup
+
+Sitemap: https://caprep.in/sitemap.xml

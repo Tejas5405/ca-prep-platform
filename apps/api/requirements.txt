@@ -1,0 +1,55 @@
+# CA Prep Platform API - pinned runtime dependencies.
+#
+# Versions are pinned exactly and were verified to resolve by installing them.
+# Render rebuilds on every deploy, so an unpinned dependency becomes an
+# unreviewed production change on someone else's push.
+#
+# UPGRADE POLICY: move these deliberately, one at a time, with the test suite
+# green afterwards. Never with a range specifier.
+
+# ---------------------------------------------------------------- web layer
+fastapi==0.141.1
+uvicorn[standard]==0.53.0
+python-multipart==0.0.32
+
+# ----------------------------------------------------------------- settings
+pydantic==2.13.5
+pydantic-settings==2.15.0
+
+# --------------------------------------------------------------- data layer
+SQLAlchemy==2.0.54
+alembic==1.20.0
+# psycopg 3. psycopg2 is the superseded driver and is synchronous-only, so it
+# cannot back the async engine used in app/core/dependencies.py.
+psycopg[binary]==3.3.6
+
+# ------------------------------------------------------------------- cache
+redis==8.1.0
+rq==2.12.0
+
+# -------------------------------------------------------------------- auth
+PyJWT[crypto]==2.15.0
+cryptography==50.0.1
+
+# ---------------------------------------------------------------- document
+# The tiered extraction chain from blueprint v3 §11.2:
+#   tier 1  PyMuPDF     digital text layer
+#   tier 2  pdfplumber  layout / table fallback
+#   tier 3  pdf2image + pytesseract  scanned pages
+#
+# NOTE: pdf2image needs the Poppler binary and pytesseract needs the Tesseract
+# binary installed in the image. Pinning the Python packages is NOT sufficient -
+# see apps/api/Dockerfile.
+PyMuPDF==1.28.2
+pdfplumber==0.11.10
+pdf2image==1.17.0
+pytesseract==0.3.13
+Pillow==12.3.0
+
+# ------------------------------------------------------------------ HTTP
+httpx==0.28.1
+resend==2.47.0
+
+# -------------------------------------------------------------------- ops
+# Optional: the app runs normally with no DSN configured.
+sentry-sdk[fastapi]==2.70.0
