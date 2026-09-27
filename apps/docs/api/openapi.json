@@ -5487,7 +5487,7 @@
     },
     "/api/v1/admin/curriculum": {
       "get": {
-        "description": "The student list hides inactive rows. This one does not, or a deactivated paper vanishes from the editor.",
+        "description": "The student list hides inactive rows.\n\nThis one does not, or a deactivated paper vanishes from the editor.",
         "operationId": "admin_curriculum_api_v1_admin_curriculum_get",
         "responses": {
           "200": {

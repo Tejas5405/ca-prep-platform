@@ -22,12 +22,16 @@ from app.models.question import Question, QuestionOption, QuestionVersion
 
 async def option_rows(session: AsyncSession, question_id: uuid.UUID) -> list[QuestionOption]:
     rows = (
-        await session.execute(
-            select(QuestionOption)
-            .where(QuestionOption.question_id == question_id)
-            .order_by(QuestionOption.sequence, QuestionOption.label)
+        (
+            await session.execute(
+                select(QuestionOption)
+                .where(QuestionOption.question_id == question_id)
+                .order_by(QuestionOption.sequence, QuestionOption.label)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return list(rows)
 
 

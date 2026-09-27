@@ -22,6 +22,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1 import (
     access,
     admin,
+    assistant,
+    campus,
     collections,
     content,
     curriculum,
@@ -38,8 +40,6 @@ from app.api.v1 import (
     revision,
     search,
     studio,
-    assistant,
-    campus,
     users,
 )
 from app.core.config import get_settings

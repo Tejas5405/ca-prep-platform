@@ -373,9 +373,15 @@ describe('the upgrade screen', () => {
     const user = userEvent.setup()
     await user.click(await screen.findByRole('button', { name: /pay ₹999/i }))
 
+    // The page's own heading for the 503 case, and the server's sentence beneath it.
+    // It does not print a message of its own here: the API's `detail` names the
+    // variables that are actually unset on this deployment, which is more useful to
+    // the operator reading it than page copy - and the page cannot know which of the
+    // three are missing, so inventing its own sentence would be guessing.
     expect(
-      await screen.findByText(/cannot take payments yet/i),
+      await screen.findByText(/checkout is not configured on this deployment/i),
     ).toBeInTheDocument()
+    expect(screen.getByText(/payments are not enabled on this deployment/i)).toBeInTheDocument()
     for (const name of ['RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET', 'RAZORPAY_WEBHOOK_SECRET']) {
       expect(screen.getByText(name)).toBeInTheDocument()
     }

@@ -17,8 +17,8 @@ from sqlalchemy import select
 from app.models.content import ContentDocument
 from app.models.engagement import PlatformSetting
 from app.models.question import Question
-from app.services.platform_defaults import ensure_platform_defaults
 from app.seed import seed_curriculum
+from app.services.platform_defaults import ensure_platform_defaults
 
 from ._db import run_in_database
 from .test_postgres_publishing import Actor, make_user
@@ -43,7 +43,9 @@ async def _spine(session: Any) -> tuple[Any, Any]:
     return course, subject
 
 
-async def _page(session: Any, owner: Any, *, tier: str, phrase: str, published: bool = True) -> None:
+async def _page(
+    session: Any, owner: Any, *, tier: str, phrase: str, published: bool = True
+) -> None:
     from app.models.content import DocumentPage
 
     document = ContentDocument(
@@ -175,7 +177,9 @@ def test_plans_are_the_code_catalogue_and_storage_does_not_invent_usage(
     assert set(result["storage"]["missingEnv"]) <= {"SUPABASE_URL", "SUPABASE_SECRET_KEY"}
     assert result["ai"]["generatesAnswers"] is False
     assert result["ai"]["groundingOptional"] is False
-    assert result["ai"]["missingEnv"] == ["AI_PROVIDER_API_KEY"] or result["ai"]["providerConfigured"]
+    assert (
+        result["ai"]["missingEnv"] == ["AI_PROVIDER_API_KEY"] or result["ai"]["providerConfigured"]
+    )
 
 
 def test_a_revision_does_not_rewrite_the_key_a_student_was_marked_on(database_url: str) -> None:

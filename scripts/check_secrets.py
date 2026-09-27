@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# print() is this CLI's designed interface: the scan report written to stdout is the
+# product, not debug output left behind in library code, which is what T201 targets.
+# ruff: noqa: T201
 """Scan a revision, the index, or the working tree for credentials.
 
 Why this exists
@@ -131,7 +134,12 @@ ALLOWLIST: tuple[tuple[str, str, str], ...] = (
 
 
 def git(*args: str) -> subprocess.CompletedProcess[bytes]:
-    return subprocess.run(["git", *args], cwd=REPO, capture_output=True, check=False)
+    # S603/S607: fixed argv, no shell, and the only variable parts are literals from
+    # this file plus the operator's own --rev value - no untrusted input. `git` on
+    # PATH is the documented prerequisite for running this scanner (GIT_BASELINE.md).
+    return subprocess.run(  # noqa: S603 - fixed argv, no shell, no untrusted input
+        ["git", *args], cwd=REPO, capture_output=True, check=False  # noqa: S607
+    )
 
 
 def materialize(mode: str, rev: str) -> tuple[Path | None, str]:

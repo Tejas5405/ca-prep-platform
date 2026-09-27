@@ -65,7 +65,10 @@ DEFAULT_SETTINGS: tuple[SettingDefault, ...] = (
     SettingDefault(
         "features.ai_assistant",
         False,
-        "When on, students can ask the library. Answers are quotations from documents they may read. A generated explanation is not called.",
+        (
+            "When on, students can ask the library. Answers are quotations from documents "
+            "they may read. A generated explanation is not called."
+        ),
         True,
     ),
     SettingDefault(

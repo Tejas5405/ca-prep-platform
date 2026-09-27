@@ -140,8 +140,12 @@ because the host follows the `@` and so lies outside the match, and `git grep`'s
 now done in Python, so git's POSIX-ERE limits cannot hide a hit again.
 
 `scripts/` sits outside the repository's ruff gate (that gate runs in `apps/api`, whose config sets
-`src = ["app", "tests", "alembic"]`). The new script's lint profile matches the two existing scripts:
-`T201` (print) and `S603`/`S607` (subprocess), inherent to a CLI that shells out to git.
+`src = ["app", "tests", "alembic"]`). The scanner's CLI-inherent profile — `T201` (print is this
+tool's report interface) and `S603`/`S607` (a single `subprocess.run` call with a fixed `git` argv) —
+is suppressed where it occurs, each suppression carrying a written reason (file-level
+`# ruff: noqa: T201`; inline `# noqa: S603, S607` on the `git()` helper), so
+`uvx ruff@0.14.5 check ../../scripts/check_secrets.py` reports 0 findings. The two pre-existing
+scripts in `scripts/` were not touched and still report findings there.
 
 ---
 

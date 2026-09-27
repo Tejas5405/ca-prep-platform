@@ -212,7 +212,15 @@ export const FEATURES: Feature[] = [
     body: 'A labelled study suggestion, only from excerpts you may already read.',
     detail:
       'Asking the library is off until an owner turns features.ai_assistant on. With AI_PROVIDER_API_KEY set, a suggestion is written only when an excerpt the student may read was found, and it is labelled as not a legal authority. Without excerpts, or without the key, no answer is invented.',
-    status: 'AVAILABLE',
+    /*
+     * IN_BUILD, not AVAILABLE, and that is a statement about the deployment rather
+     * than about the code. `features.ai_assistant` is False in
+     * `app/services/platform_defaults.py` and no deployment in `infra/` sets
+     * AI_PROVIDER_API_KEY, so no student can generate an answer today. The landing
+     * grid renders only AVAILABLE features, so this card must not sit in it; the
+     * roadmap names the assistant as not built, and the two lists have to agree.
+     */
+    status: 'IN_BUILD',
   },
 ]
 

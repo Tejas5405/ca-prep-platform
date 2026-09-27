@@ -215,8 +215,8 @@ Every gate that could be run in this workspace was run after the last change (th
 | 6 | Secret scan, index | `… --staged` | CLEAN, exit 0 |
 | 7 | Secret scan, working tree | `… --worktree` | CLEAN, exit 0 |
 | 8 | Secret scan, negative control | plant key + remote DSN, then scan | **2 unexpected matches, exit 1** (proves the gate can fail) |
-| 9 | Lint (backend) | `ruff check .` | 29 errors — **all pre-existing**, see §6 |
-| 10 | Frontend suite | `npx vitest run` | 246 passed / 2 failed (2 of 19 files) — **pre-existing**, see §6 |
+| 9 | Lint (backend) | `ruff check .` | 29 errors — **all pre-existing**, see §6. **Fixed since:** re-run → `All checks passed!` (ruff 0.14.5) |
+| 10 | Frontend suite | `npx vitest run` | 246 passed / 2 failed (2 of 19 files) — **pre-existing**, see §6. **Fixed since:** re-run → **248 passed / 0 failed** (19 files) |
 
 Gates 1–4 and 5–7 are green. Gates 9 and 10 are **not** green, and were not made green: they are
 pre-existing failures unrelated to P0, and reporting them beats quietly fixing adjacent code.
@@ -229,14 +229,17 @@ pre-existing failures unrelated to P0, and reporting them beats quietly fixing a
 None of these were caused by this task, and fixing them would have widened the blast radius of a
 security remediation. Each is reproducible, so each is stated rather than papered over.
 
+**Update (later the same day):** rows 1, 2 and 6 below have since been fixed — each original
+finding is kept and carries its own update. Rows 3, 4, 5 and 7 stand as written.
+
 | # | Finding | Evidence | Why it was left alone |
 |---|---------|----------|------------------------|
-| 1 | **29 ruff errors** in `apps/api` (7 auto-fixable) and 5 files that `ruff format --check` would reformat | `ruff check .` / `ruff format --check .` in `apps/api` | Pre-existing lint debt. Reformatting 5 files would bury the P0 diff in unrelated churn |
-| 2 | **2 frontend tests fail** — `checkout.test.tsx` *"names the missing environment variables when the API has no gateway keys"* (`:377`) and `landing.test.tsx` *"does not list video or AI inside the shipped feature grid"* (`:247`) | `npx vitest run` → 246 passed / 2 failed | Deterministic content assertions on marketing copy and an empty-env path; unrelated to credentials, the database or Git |
+| 1 | **29 ruff errors** in `apps/api` (7 auto-fixable) and 5 files that `ruff format --check` would reformat | `ruff check .` / `ruff format --check .` in `apps/api` | Pre-existing lint debt. Reformatting 5 files would bury the P0 diff in unrelated churn. **Fixed since:** all 29 errors resolved and the files formatted by the next milestone — `ruff check .` → `All checks passed!` and `ruff format --check .` → `148 files already formatted` (ruff 0.14.5, re-run 27 Sep 2026) |
+| 2 | **2 frontend tests fail** — `checkout.test.tsx` *"names the missing environment variables when the API has no gateway keys"* (`:377`) and `landing.test.tsx` *"does not list video or AI inside the shipped feature grid"* (`:247`) | `npx vitest run` → 246 passed / 2 failed | Deterministic content assertions on marketing copy and an empty-env path; unrelated to credentials, the database or Git. **Fixed since:** the shipped copy now agrees with the assertions — the assistant card is `IN_BUILD` in `apps/web/src/lib/publicContent.ts` (it is: `features.ai_assistant` defaults `False` and no deployment sets `AI_PROVIDER_API_KEY`), and the checkout test now asserts the page's 503 heading plus the server's `detail`, which names the missing variables — the plan's P2-1 alternative, *"the test if the copy decision changes deliberately"*. Re-run: **248 passed / 0 failed** |
 | 3 | **`greenlet` is absent from `requirements-dev`**, though the SQLAlchemy async stack needs it | Import failure when the async engine is exercised outside the app's own dependency set | A dependency change is a separate, reviewable decision |
 | 4 | **`.env.example` repeats `DIRECT_DATABASE_URL=`** (lines 44 and 173, identical values) | Read of the file | Behaviour is unaffected; the file's own note warns that a second assignment silently wins, so it belongs with a template cleanup, not with a security commit |
 | 5 | **`DEBUG=release` exported in a shell breaks settings parsing** (`ValidationError`) | `python -m alembic …` / pytest immediately after `export DEBUG=release` | Environment issue, not a code defect: the shell value overrides `.env`. All gates here were run with `env -u DEBUG`. Recorded in `docs/DB_REBASELINE.md` §3 |
-| 6 | **`scripts/check_secrets.py` carries `T201` / `S603` / `S607`** lint findings | `ruff check ../../scripts/check_secrets.py` | Expected for a CLI that prints and shells out to git — the same profile as the two existing scripts in `scripts/`, which sit outside the lint gate (`apps/api` scopes `src = ["app", "tests", "alembic"]`) |
+| 6 | **`scripts/check_secrets.py` carries `T201` / `S603` / `S607`** lint findings | `ruff check ../../scripts/check_secrets.py` | Expected for a CLI that prints and shells out to git — the same profile as the two existing scripts in `scripts/`, which sit outside the lint gate (`apps/api` scopes `src = ["app", "tests", "alembic"]`). **Fixed since:** each finding is suppressed where it occurs, with a written reason — file-level `# ruff: noqa: T201` (print is this CLI's report interface) and inline `# noqa: S603, S607` on the single fixed-argv `git()` call — so `uvx ruff@0.14.5 check ../../scripts/check_secrets.py` reports 0 findings, and the scanner still exits CLEAN on `HEAD` and `--worktree` |
 | 7 | **`apps/web/dist/` now exists** (created by the frontend gate) | `ls apps/web/dist` | Already git-ignored; a build artefact, not a tracked change |
 
 ---
@@ -259,6 +262,7 @@ security remediation. Each is reproducible, so each is stated rather than papere
 |----------|-------|
 | Commit 1 | `4a3090c` — 334 files, branch `main` |
 | Commit 2 | evidence docs + scanner (`docs/GIT_BASELINE.md`, `docs/P0_EXECUTION_REPORT.md`, `scripts/check_secrets.py`, `docs/SECURITY_REMEDIATION.md` update) |
+| Commit 3 | this change — §6 rows 1, 2 and 6 fixed (lint gate green, web suite green, scanner lint suppressed with written reasons) and this report updated |
 | Remote | none — nothing was pushed |
 | CI runs triggered | none |
 | Deployments triggered | none |
@@ -277,7 +281,8 @@ security remediation. Each is reproducible, so each is stated rather than papere
   in the history to purge — `filter-repo`/BFG would be a destructive answer to a question this
   repository does not have.
 * **No feature work, no refactor, no dependency change.** Items 1–3 of §6 are reported so the next
-  milestone can schedule them.
+  milestone can schedule them. *(Items 1 and 2 have since been fixed — see the update under §6;
+  item 3, `greenlet`, remains open.)*
 
 ---
 

@@ -363,6 +363,4 @@ class PaymentGatewayConfig(Base, UuidMixin, TimestampMixin):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
-    __table_args__ = (
-        UniqueConstraint("provider", name="uq_payment_gateway_provider"),
-    )
+    __table_args__ = (UniqueConstraint("provider", name="uq_payment_gateway_provider"),)

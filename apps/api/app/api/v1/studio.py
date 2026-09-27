@@ -208,7 +208,10 @@ def _question_rules(
     if question_type in _OBJECTIVE and not (correct_answer and correct_answer.strip()):
         return "An objective question needs a correct_answer. The database rejects one without it."
     if is_historical and not (disclaimer_text and disclaimer_text.strip()):
-        return "A historical taxation question needs disclaimer_text, or a student sees stale law with no warning."
+        return (
+            "A historical taxation question needs disclaimer_text, or a student sees "
+            "stale law with no warning."
+        )
     return None
 
 
@@ -289,9 +292,7 @@ async def list_questions(
         conditions.append(Question.text.ilike(_ilike_contains(q.strip()), escape="\\"))
 
     base = select(Question).where(*conditions)
-    total = (
-        await session.execute(select(func.count()).select_from(base.subquery()))
-    ).scalar_one()
+    total = (await session.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
     rows = (
         (
             await session.execute(
@@ -330,7 +331,9 @@ async def get_question(
     return success(_question_item(row, full=True), request_id=get_request_id())
 
 
-@router.post("/admin/questions", status_code=status.HTTP_201_CREATED, summary="Create a draft question")
+@router.post(
+    "/admin/questions", status_code=status.HTTP_201_CREATED, summary="Create a draft question"
+)
 async def create_question(
     payload: QuestionCreate,
     request: Request,
@@ -442,7 +445,10 @@ async def update_question(
         return problem(
             status=status.HTTP_409_CONFLICT,
             title="Published questions are not edited here",
-            detail="A published question is corrected with revise, which keeps the old version. A patch here would change the key under attempts already scored.",
+            detail=(
+                "A published question is corrected with revise, which keeps the old version. "
+                "A patch here would change the key under attempts already scored."
+            ),
             type_slug="questions",
         )
     if payload.difficulty is not None and payload.difficulty not in _DIFFICULTIES:
@@ -452,12 +458,16 @@ async def update_question(
             detail=f"Difficulty must be one of {', '.join(sorted(_DIFFICULTIES))}.",
             type_slug="questions",
         )
-    next_historical = payload.is_historical if payload.is_historical is not None else row.is_historical
+    next_historical = (
+        payload.is_historical if payload.is_historical is not None else row.is_historical
+    )
     next_disclaimer = (
         payload.disclaimer_text if "disclaimer_text" in values else row.disclaimer_text
     )
     next_answer = payload.correct_answer if "correct_answer" in values else row.correct_answer
-    option_models = [OptionIn.model_validate(item) for item in new_options] if new_options is not None else None
+    option_models = (
+        [OptionIn.model_validate(item) for item in new_options] if new_options is not None else None
+    )
     reason = _question_rules(
         question_type=row.question_type,
         correct_answer=next_answer,
@@ -497,7 +507,7 @@ async def update_question(
         summary=f"Updated question {row.id}",
         target_type="question",
         target_id=row.id,
-        changes={key: True for key in values},
+        changes=dict.fromkeys(values, True),
         request=request,
     )
     await session.commit()
@@ -514,12 +524,16 @@ async def question_versions(
     if not isinstance(parsed, uuid.UUID):
         return parsed
     rows = (
-        await session.execute(
-            select(QuestionVersion)
-            .where(QuestionVersion.question_id == parsed)
-            .order_by(QuestionVersion.version_number.desc())
+        (
+            await session.execute(
+                select(QuestionVersion)
+                .where(QuestionVersion.question_id == parsed)
+                .order_by(QuestionVersion.version_number.desc())
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return success(
         {
             "versions": [
@@ -568,7 +582,10 @@ async def revise_question(
         return problem(
             status=status.HTTP_409_CONFLICT,
             title="Only a published question is revised",
-            detail="Edit a draft with the ordinary save. Revise is for a question students may already have sat.",
+            detail=(
+                "Edit a draft with the ordinary save. Revise is for a question students may "
+                "already have sat."
+            ),
             type_slug="questions",
         )
     previous = await record_version(
@@ -589,9 +606,7 @@ async def revise_question(
     )
     if option_models is None and row.question_type in {"MCQ", "MSQ"}:
         existing = await option_rows(session, row.id)
-        option_models_for_check = [
-            OptionIn(label=item.label, text=item.text) for item in existing
-        ]
+        option_models_for_check = [OptionIn(label=item.label, text=item.text) for item in existing]
     else:
         option_models_for_check = option_models
     reason = _question_rules(
@@ -664,7 +679,10 @@ async def list_flags(
                 }
                 for flag, text in rows
             ],
-            "note": "Resolving a report does not change the question. A correction is a revision, which keeps the old version.",
+            "note": (
+                "Resolving a report does not change the question. A correction is a revision, "
+                "which keeps the old version."
+            ),
         },
         request_id=get_request_id(),
     )
@@ -761,9 +779,9 @@ async def _known_questions(session: AsyncSession, ids: list[uuid.UUID]) -> str |
         return None
     found = (
         await session.execute(
-            select(func.count()).select_from(Question).where(
-                Question.id.in_(ids), Question.deleted_at.is_(None)
-            )
+            select(func.count())
+            .select_from(Question)
+            .where(Question.id.in_(ids), Question.deleted_at.is_(None))
         )
     ).scalar_one()
     if int(found) != len(set(ids)):
@@ -776,7 +794,11 @@ async def list_mocks(
     session: AsyncSession = Depends(get_db),
     _actor: User = Depends(require_permission(Permission.MANAGE_TESTS)),
 ) -> Any:
-    rows = (await session.execute(select(MockTest).order_by(MockTest.created_at.desc()))).scalars().all()
+    rows = (
+        (await session.execute(select(MockTest).order_by(MockTest.created_at.desc())))
+        .scalars()
+        .all()
+    )
     return success({"mocks": [_mock_item(row) for row in rows]}, request_id=get_request_id())
 
 
@@ -961,8 +983,13 @@ async def admin_curriculum(
     session: AsyncSession = Depends(get_db),
     _actor: User = Depends(require_permission(Permission.MANAGE_CURRICULUM)),
 ) -> Any:
-    """The student list hides inactive rows. This one does not, or a deactivated paper vanishes from the editor."""
-    courses = (await session.execute(select(Course).order_by(Course.level, Course.code))).scalars().all()
+    """The student list hides inactive rows.
+
+    This one does not, or a deactivated paper vanishes from the editor.
+    """
+    courses = (
+        (await session.execute(select(Course).order_by(Course.level, Course.code))).scalars().all()
+    )
     subjects = (await session.execute(select(Subject).order_by(Subject.code))).scalars().all()
     chapters = (await session.execute(select(Chapter).order_by(Chapter.sequence))).scalars().all()
     topics = (await session.execute(select(Topic).order_by(Topic.sequence))).scalars().all()
@@ -1010,7 +1037,9 @@ async def admin_curriculum(
     )
 
 
-@router.post("/admin/curriculum/courses", status_code=status.HTTP_201_CREATED, summary="Add a course")
+@router.post(
+    "/admin/curriculum/courses", status_code=status.HTTP_201_CREATED, summary="Add a course"
+)
 async def create_course(
     payload: CourseWrite,
     request: Request,
@@ -1021,7 +1050,10 @@ async def create_course(
         return problem(
             status=status.HTTP_422_UNPROCESSABLE_ENTITY,
             title="Unknown course value",
-            detail="Level must be FOUNDATION, INTERMEDIATE or FINAL. Scheme must be OLD_2016, NEW_2024 or UNMAPPED.",
+            detail=(
+                "Level must be FOUNDATION, INTERMEDIATE or FINAL. Scheme must be OLD_2016, "
+                "NEW_2024 or UNMAPPED."
+            ),
             type_slug="curriculum",
         )
     row = Course(
@@ -1092,7 +1124,9 @@ async def update_course(
     return success(_course_item(row), request_id=get_request_id())
 
 
-@router.post("/admin/curriculum/subjects", status_code=status.HTTP_201_CREATED, summary="Add a subject")
+@router.post(
+    "/admin/curriculum/subjects", status_code=status.HTTP_201_CREATED, summary="Add a subject"
+)
 async def create_subject(
     payload: SubjectWrite,
     request: Request,
@@ -1143,7 +1177,10 @@ async def create_subject(
         request=request,
     )
     await session.commit()
-    return success({"id": str(row.id), "code": row.code, "name": row.name}, request_id=get_request_id())
+    return success(
+        {"id": str(row.id), "code": row.code, "name": row.name},
+        request_id=get_request_id(),
+    )
 
 
 @router.patch("/admin/curriculum/subjects/{subject_id}", summary="Rename or retire a subject")
@@ -1157,7 +1194,9 @@ async def update_subject(
     return await _rename(session, actor, request, Subject, subject_id, "subject", payload)
 
 
-@router.post("/admin/curriculum/chapters", status_code=status.HTTP_201_CREATED, summary="Add a chapter")
+@router.post(
+    "/admin/curriculum/chapters", status_code=status.HTTP_201_CREATED, summary="Add a chapter"
+)
 async def create_chapter(
     payload: ChapterWrite,
     request: Request,
@@ -1201,7 +1240,10 @@ async def create_chapter(
         request=request,
     )
     await session.commit()
-    return success({"id": str(row.id), "code": row.code, "name": row.name}, request_id=get_request_id())
+    return success(
+        {"id": str(row.id), "code": row.code, "name": row.name},
+        request_id=get_request_id(),
+    )
 
 
 @router.patch("/admin/curriculum/chapters/{chapter_id}", summary="Rename or retire a chapter")
@@ -1257,7 +1299,10 @@ async def create_topic(
         request=request,
     )
     await session.commit()
-    return success({"id": str(row.id), "code": row.code, "name": row.name}, request_id=get_request_id())
+    return success(
+        {"id": str(row.id), "code": row.code, "name": row.name},
+        request_id=get_request_id(),
+    )
 
 
 @router.patch("/admin/curriculum/topics/{topic_id}", summary="Rename or retire a topic")
@@ -1304,7 +1349,10 @@ async def _rename(
         request=request,
     )
     await session.commit()
-    return success({"id": str(row.id), "name": row.name, "isActive": row.is_active}, request_id=get_request_id())
+    return success(
+        {"id": str(row.id), "name": row.name, "isActive": row.is_active},
+        request_id=get_request_id(),
+    )
 
 
 # --------------------------------------------------------- plans, ai, storage
@@ -1479,7 +1527,10 @@ async def storage_status(
                 "Object counts are not reported until the secret key is set. "
                 "A zero here would be indistinguishable from an empty bucket."
                 if missing
-                else "The credential is set. A bucket listing is not implemented in this client, so no count is shown."
+                else (
+                    "The credential is set. A bucket listing is not implemented in this "
+                    "client, so no count is shown."
+                )
             ),
         },
         request_id=get_request_id(),
@@ -1527,12 +1578,16 @@ async def unclassified_questions(
         )
     ).scalar_one()
     components = (
-        await session.execute(
-            select(SubjectComponent).where(SubjectComponent.is_active.is_(True)).order_by(
-                SubjectComponent.sort_order
+        (
+            await session.execute(
+                select(SubjectComponent)
+                .where(SubjectComponent.is_active.is_(True))
+                .order_by(SubjectComponent.sort_order)
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return success(
         {
             "total": int(total or 0),
@@ -1638,8 +1693,10 @@ async def list_law_notices(
     _actor: User = Depends(require_permission(Permission.MANAGE_QUESTIONS)),
 ) -> Any:
     rows = (
-        await session.execute(select(LawNotice).order_by(LawNotice.created_at.desc()).limit(50))
-    ).scalars().all()
+        (await session.execute(select(LawNotice).order_by(LawNotice.created_at.desc()).limit(50)))
+        .scalars()
+        .all()
+    )
     return success(
         {
             "notices": [
@@ -1679,17 +1736,23 @@ async def record_law_notice(
     citation = payload.citation.strip()
     pattern = f"%{_like_literal(citation)}%"
     questions = (
-        await session.execute(
-            select(Question).where(
-                Question.deleted_at.is_(None),
-                Question.status == "PUBLISHED",
-                or_(
-                    Question.text.ilike(pattern, escape="\\"),
-                    Question.explanation.ilike(pattern, escape="\\"),
-                ),
-            ).limit(200)
+        (
+            await session.execute(
+                select(Question)
+                .where(
+                    Question.deleted_at.is_(None),
+                    Question.status == "PUBLISHED",
+                    or_(
+                        Question.text.ilike(pattern, escape="\\"),
+                        Question.explanation.ilike(pattern, escape="\\"),
+                    ),
+                )
+                .limit(200)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     flagged = 0
     for question in questions:
         try:
@@ -1701,8 +1764,7 @@ async def record_law_notice(
                         reported_by=actor.id,
                         reason="HISTORICAL",
                         detail=(
-                            f"Law notice: {citation}. Review required. "
-                            "The answer was not changed."
+                            f"Law notice: {citation}. Review required. The answer was not changed."
                         ),
                         status="OPEN",
                     )
