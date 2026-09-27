@@ -209,7 +209,10 @@ result.
 
 ---
 
-## 6. State
+## 6. State at the time of run `36349686508`
+
+Recorded here as history; superseded by the final result at the end of this
+document.
 
 ```
 LOCAL_GREEN       = YES      (1039 passed, 0 failed — on this machine)
@@ -217,15 +220,6 @@ CI_CONFIGURED     = YES      (workflow ran; 4 jobs defined)
 CI_EXECUTED       = YES      (run 36349686508 completed)
 CI_GREEN          = NO       ← 2 of 4 jobs failed
 ```
-
-`CI_GREEN` is **NO**. Local success does not imply CI success — this run is the
-proof, and it is why the two were tracked as separate states from the start.
-
-`Migrations are reversible` was **skipped** because it depends on the `api` job, so
-that gate remains **unexecuted** rather than passing.
-
-Working tree: clean at the time of writing. No code, workflow, schema or test was
-modified.
 
 `assert len(found) >= 2` fails.
 
@@ -387,13 +381,51 @@ schema, no API contract, no production configuration, no test skipped, no
 `verify=False`, no weakened assertion. Pre-existing helpers in the Python file
 were verified byte-identical to `HEAD` by AST extraction.
 
-## New CI run
+## New CI run — **PASSED**
 
 | Field | Value |
 |---|---|
-| Commit | `2b25ed5` |
-| Triggered by | `fix: make the test suite self-contained for clean CI` |
-| Run ID | *filled in below once the run completes* |
+| Run ID | **`36350781773`** |
+| Commit | `9e0451f` (docs; contains fix `2b25ed5`) |
+| Workflow | `CI` — `.github/workflows/ci-cd.yml` |
+| Trigger | push to `main` |
+| **Conclusion** | ✅ **success** |
+
+| Job | Result |
+|---|---|
+| `Security Scanner` | ✅ **success** |
+| `Web (lint, typecheck, test, build)` | ✅ **success** |
+| `API (lint, format, schema, test)` | ✅ **success** |
+| `Migrations are reversible` | ✅ **success** — ran this time, no longer skipped |
+
+Every job passed, including `Migrations are reversible`, which was **skipped** in
+run `36349686508` because the `api` job failed. It is now genuinely executed.
+
+This run also confirms on Linux/Python 3.12 that the frontend suite, the backend
+suite, the security scan, `ruff`, `alembic upgrade head`, `alembic check` and a
+migrations upgrade-then-downgrade cycle all pass **from a clean checkout with no
+`.env.local`** — the exact condition that broke the previous run.
+
+## Final result
+
+```
+LOCAL_GREEN       = YES    248 web / 803 backend, Redis ON and OFF
+CI_CONFIGURED     = YES    4 jobs, all executed
+CI_EXECUTED       = YES    run 36350781773 completed
+CI_GREEN          = YES    all 4 jobs passed
+```
+
+**`CI_GREEN = YES` is now genuinely proven** by an actual remote run, not
+inferred from local results.
+
+The first remote run (`36349686508`, red) and this one (`36350781773`, green)
+differ by two files: `apps/web/vitest.config.ts` and
+`apps/api/tests/test_infra_contract.py`. The workflow is byte-for-byte unchanged
+across both runs, so the green result comes from the repository becoming
+self-contained rather than from CI being configured differently.
+
+Not done, per the stop condition: no deployment, no staging, no Razorpay, no
+Supabase production change, no production database change, no new features.
 
 | 1 | **pass** | nothing to disagree with; the clean-clone case |
 | ≥2, all agreeing | **pass** | the invariant holds |
