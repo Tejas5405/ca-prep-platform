@@ -307,6 +307,47 @@ credential, and contained none of the five values the isolation proof requires.
 No database was connected, no migration was run, and no development resource was
 touched. All gates re-verified green: 821 backend, 248 web, secrets CLEAN ×3.
 
+## B.7 P2A-3 — Supabase staging validation: 4 of 6 proven
+
+Full detail in **`docs/STAGING_SUPABASE_VALIDATION.md`**. Summary:
+
+```
+STAGING_SUPABASE_CREATED    = YES
+STAGING_SUPABASE_ISOLATED   = YES
+STAGING_AUTH_REACHABLE      = YES
+STAGING_STORAGE_VERIFIED    = BLOCKED_EXTERNAL
+STAGING_DATABASE_IDENTIFIED = BLOCKED_EXTERNAL
+STAGING_MIGRATIONS_APPLIED  = BLOCKED_EXTERNAL
+```
+
+**Project isolation is proven behaviourally**, not by comparing refs: the staging
+publishable key returns 200 from the staging project while the **development** key
+returns 401 with *"This API key might also be owned by another Supabase project."*
+Auth is reachable: JWKS serves one `ES256` key, which is what `PyJWKClient`
+expects, and the app-derived `jwks_url` matches the live endpoint exactly.
+
+The three blocked flags share **one root cause: there is no local staging
+configuration file.** `.env.staging` does not exist, only the placeholder
+templates. So there is no staging `DATABASE_URL` to run
+`SELECT current_database()` against, and no rotated secret key to enumerate
+buckets with.
+
+**`alembic upgrade head` was deliberately not run.** Applying migrations is the
+irreversible action in this milestone, and the target database is unproven. The
+head is known (`6c3f7b0a0c13`) and CI already proves upgrade → downgrade →
+upgrade, so the chain is sound; only the target is missing. The development
+database was not written to in any way.
+
+A **seed mechanism already exists** (`apps/api/app/seed.py`): idempotent by
+construction, synthetic reference content rather than exported development data,
+with a safe `--check` mode. It was not run — no staging connection to run it
+against — but it means the later E2E milestone will not need a new seed system.
+
+Also confirmed for Phase 6: `NEXT_PUBLIC_*` appears **nowhere** in the repository
+(0 occurrences), the frontend uses `VITE_` only, and no secret carries a `VITE_`
+prefix.
+
+
 
 ## B.5 Next milestone
 
