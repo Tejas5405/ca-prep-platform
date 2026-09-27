@@ -516,6 +516,74 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/admin/payments/events",
+    "required": [
+      "VIEW_PAYMENTS"
+    ],
+    "statuses": {
+      "STUDENT": 403,
+      "EDITOR": 403,
+      "CONTENT_MANAGER": 403,
+      "MODERATOR": 403,
+      "ADMIN": 200,
+      "SUPER_ADMIN": 200
+    },
+    "failures": [],
+    "unavailable": []
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/payments/gateway",
+    "required": [
+      "VIEW_PAYMENTS"
+    ],
+    "statuses": {
+      "STUDENT": 403,
+      "EDITOR": 403,
+      "CONTENT_MANAGER": 403,
+      "MODERATOR": 403,
+      "ADMIN": 200,
+      "SUPER_ADMIN": 200
+    },
+    "failures": [],
+    "unavailable": []
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/admin/payments/gateway",
+    "required": [
+      "MANAGE_SETTINGS"
+    ],
+    "statuses": {
+      "STUDENT": 403,
+      "EDITOR": 403,
+      "CONTENT_MANAGER": 403,
+      "MODERATOR": 403,
+      "ADMIN": 403,
+      "SUPER_ADMIN": 422
+    },
+    "failures": [],
+    "unavailable": []
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/admin/payments/orders",
+    "required": [
+      "VIEW_PAYMENTS"
+    ],
+    "statuses": {
+      "STUDENT": 403,
+      "EDITOR": 403,
+      "CONTENT_MANAGER": 403,
+      "MODERATOR": 403,
+      "ADMIN": 200,
+      "SUPER_ADMIN": 200
+    },
+    "failures": [],
+    "unavailable": []
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/admin/permissions",
     "required": [
       "VIEW_USERS"
@@ -1477,8 +1545,38 @@
     "unavailable": []
   },
   {
+    "method": "POST",
+    "path": "/api/v1/practice/questions/{question_id}/flags",
+    "required": [],
+    "statuses": {
+      "STUDENT": 422,
+      "EDITOR": 422,
+      "CONTENT_MANAGER": 422,
+      "MODERATOR": 422,
+      "ADMIN": 422,
+      "SUPER_ADMIN": 422
+    },
+    "failures": [],
+    "unavailable": []
+  },
+  {
     "method": "GET",
     "path": "/api/v1/progress/overview",
+    "required": [],
+    "statuses": {
+      "STUDENT": 200,
+      "EDITOR": 200,
+      "CONTENT_MANAGER": 200,
+      "MODERATOR": 200,
+      "ADMIN": 200,
+      "SUPER_ADMIN": 200
+    },
+    "failures": [],
+    "unavailable": []
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/progress/projection",
     "required": [],
     "statuses": {
       "STUDENT": 200,
