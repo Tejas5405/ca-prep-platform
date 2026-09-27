@@ -1,23 +1,166 @@
 # Staging Supabase Setup
 
 **Milestone:** P2A-2 — connect staging config and prove isolation
-**Baseline commit:** `c0228ed`
-**Status: BLOCKED — the Supabase staging credentials were not supplied.**
+**Baseline commit:** `a25d89c`
+**Status: project isolation PROVEN. Database, storage contents and bucket list
+NOT verified — see §5.** The earlier blocked attempt is in §A.
 
 ---
 
-## Summary
+## 🔴 1. Rotate the secret key that was pasted here
 
-This milestone could not proceed past step 1. The material described as a
-"Supabase credential" is a **Google OAuth client**, not a Supabase project
-credential, and it contains none of the five values the isolation proof needs.
+A **live `sb_secret_…` key was shared in plaintext in this conversation.** It is
+the most sensitive credential in the stack: Postgres `service_role` with
+`BYPASSRLS`, so it bypasses row-level security entirely and can read and write
+every table in the project, including user rows and payments.
 
-**No Supabase project was created, contacted, or verified. No database was
-connected to. No migration was run. No credential value was written to any file,
-printed, or committed.**
+**Treat it as compromised and rotate it in the Supabase dashboard
+(Settings → API Keys) before it is used anywhere.** The `GOCSPX-` Google secret
+pasted earlier needs the same treatment.
 
-The one genuinely useful thing it did contain — a leaked Google client secret — is
-handled in §1 and needs your action.
+The value was **never written to any file** in this repository, was not committed,
+and was **not used** to call any endpoint. Verification below used only the
+public URL and the **publishable** key, both public by design — they appear in
+the browser bundle.
+
+| Exposed item | Severity | Action |
+|---|---|---|
+| `sb_secret_…` (Supabase) | **Critical** — full DB access, bypasses RLS | Rotate now |
+| `GOCSPX-…` (Google OAuth) | **High** | Rotate now |
+| `sb_publishable_…` (Supabase) | None by design | No action |
+| Project ref / URL | None by design | No action |
+
+Verified clean: not in any committed file or history, tree clean, all three
+secret scans CLEAN.
+
+## 2. Supplied variables — naming corrections
+
+Three of the four names supplied are **not read by this application**. Real names
+come from `app/core/config.py` and `apps/web/src/vite-env.d.ts`:
+
+| Supplied | Read? | Correct name |
+|---|:--:|---|
+| `SUPABASE_URL` | ✅ | `SUPABASE_URL` (backend) / `VITE_SUPABASE_URL` (frontend) |
+| `SUPABASE_PUBLISHABLE_KEY` | ❌ | `VITE_SUPABASE_ANON_KEY` / `SUPABASE_SECRET_KEY` |
+| `SUPABASE_SECRET_KEY` | ✅ | `SUPABASE_SECRET_KEY` |
+| `SUPABASE_JWKS_URL` | ❌ | **not configurable** — derived in `security.py` |
+
+`SUPABASE_JWKS_URL` is deliberate, not an oversight: `security.py:284` derives the
+JWKS URL from the project URL so the two cannot drift.
+
+```python
+@property
+def jwks_url(self) -> str:
+    return f"{self._project_url()}/auth/v1/.well-known/jwks.json"
+```
+
+Confirmed the derivation matches the live endpoint exactly (§4, check 3).
+**Do not add a `SUPABASE_JWKS_URL` variable** — it would create a second source
+of truth for something already derived.
+
+
+---
+
+## 3. Project isolation — PROVEN
+
+| Check | Result |
+|---|---|
+| Development ref | `zyrmlnpvylhcpyaoizyz` |
+| Staging ref | `vfewnfwyagcxtaxbmwqb` |
+| Different project | ✅ **YES** |
+| Staging publishable key identical to dev | ✅ **NO** — different key |
+
+### The decisive test
+
+Both keys were presented to the **staging** project:
+
+| Key presented to staging | HTTP | Body |
+|---|---|---|
+| Staging publishable key | **200** | Auth settings returned |
+| **Development** publishable key | **401** | *"This API key might also be owned by another Supabase project."* |
+
+A Supabase key is bound to exactly one project, and staging rejects the
+development key by name. **Stronger than comparing refs** — it proves the two
+projects are genuinely distinct, not merely differently named.
+
+## 4. Auth, JWKS and endpoint reachability
+
+All read-only probes. **No secret was sent.**
+
+| # | Check | Result |
+|---|---|---|
+| 1 | `/auth/v1/.well-known/jwks.json` | ✅ **200**, 1 key, `alg=ES256`, `kty=EC` |
+| 2 | `/auth/v1/health`, `/auth/v1/settings` | reachable; 401 without a key, as expected |
+| 3 | App-derived JWKS URL vs live | ✅ **identical** |
+| 4 | `/rest/v1/` | reachable |
+| 5 | `/storage/v1/status` | ✅ **200** |
+| 6 | `/storage/v1/bucket` (anon) | ✅ **200**, body `[]` |
+
+`ES256` is what `PyJWKClient` expects, so the backend will verify staging tokens
+with no code change.
+
+**Bucket list is empty.** For anon that is expected and proves nothing either
+way — it may mean no buckets exist, or that they exist and are private. It
+**cannot be distinguished without the secret key**, which is why §5 lists bucket
+creation as an owner action.
+
+## 5. Not verified, and why
+
+| Item | Status | Reason |
+|---|---|---|
+| Staging database identity | **NOT VERIFIED** | no `DATABASE_URL` supplied; needs `SELECT current_database()` |
+| Staging buckets exist | **NOT VERIFIED** | needs the secret key; anon list is `[]` either way |
+| Storage upload/sign/download | **NOT VERIFIED** | needs the secret key; a synthetic object would be uploaded and deleted |
+| `ENVIRONMENT=staging` boots | **PARTIAL** | `Settings` constructed against the staging ref; `staging_isolation_problems()` empty. **No server started** |
+| Migrations | **NOT RUN** | deliberately withheld until the database is proven |
+
+## 6. Gap found — the guard would not have caught the earlier mistake
+
+The most important finding, and a real weakness in code I wrote in P2A.
+
+`Settings.staging_isolation_problems()` checks local addresses, loopback and
+production-looking bucket names. It does **not** compare the Supabase ref against
+the development one. Verified directly:
+
+```
+Settings(environment='staging',
+         supabase_url='https://zyrmlnpvylhcpyaoizyz.supabase.co')  # the DEV ref
+  → problems: []   # nothing flagged
+```
+
+A staging deployment pointed at the **development** project would have passed the
+guard silently — exactly the mistake that appeared twice in this conversation.
+The failure would surface only when a synthetic staging test created a real user
+in the development project.
+
+**Not fixed here, deliberately.** The obvious fix — hardcoding the development
+ref and refusing it in staging — is what the P2A brief prohibits ("do not
+hardcode infrastructure URLs into application code"). The correct fix is an
+**allow-list of staging refs supplied by configuration**, a design decision that
+needs the staging ref to be stable and needs its own change.
+
+Recorded for P2B as a required code change. Until then, **project isolation is
+enforced by procedure, not by code.**
+
+## 7. Owner actions to finish this milestone
+
+| # | Action | Unblocks |
+|---|---|---|
+| 1 | **Rotate the `sb_secret_` key** now | everything — the current one is exposed |
+| 2 | **Rotate the `GOCSPX-` Google secret** | the Google sign-in provider |
+| 3 | Create the staging database (or confirm the project's DB) + give me `DATABASE_URL` | database identity proof |
+| 4 | Create the three **private** buckets in the staging project | storage verification |
+| 5 | Set the rotated secret locally in `.env.staging` — do not send it | storage verification |
+
+No value needs to be sent to me again. The project ref and publishable key are
+public and already verified; everything remaining can be done on your side and
+confirmed by running commands locally.
+
+---
+
+# §A — History: the two earlier blocked attempts
+
+Retained for context. Superseded by §1-§7 above.
 
 ## 1. Security issue — rotate the exposed Google client secret
 
@@ -150,20 +293,46 @@ Run to confirm the blocked status changed nothing:
 No test was modified. No code, configuration, or schema changed in this
 milestone — only this document.
 
-## 7. Stop-condition flags
+## 7. Stop-condition flags (superseded)
 
-| Flag | Value | Basis |
+These reflected the state when only a Google OAuth client had been supplied.
+**The current values are in §8 below**, after a real staging project was verified.
+
+| Flag | Value at the time | Basis |
 |---|---|---|
 | `STAGING_SUPABASE_CREATED` | **UNVERIFIED** | not evidenced by the material supplied |
 | `STAGING_DATABASE_IDENTIFIED` | **NO** | no staging connection string supplied |
 | `STAGING_SUPABASE_ISOLATED` | **NO** | cannot compare a ref that was not supplied |
 | `STAGING_AUTH_REACHABLE` | **NO** | no staging project URL to reach |
 | `STAGING_STORAGE_VERIFIED` | **NO** | cannot inspect a project not identified |
-| `SECRETS_CLEAN` | **YES** | scanner CLEAN on worktree, staged and `HEAD`; the leaked value is not in the repository |
+| `SECRETS_CLEAN` | **YES** | scanner CLEAN; the leaked value is not in the repository |
 
-`STAGING_SUPABASE_CREATED` is recorded as **UNVERIFIED** rather than YES: a
-Google Cloud project ID is not evidence of a Supabase project. Set it once a
-Supabase staging project ref exists.
+`STAGING_SUPABASE_CREATED` was recorded as **UNVERIFIED** rather than YES: a
+Google Cloud project ID is not evidence of a Supabase project.
+
+---
+
+## 8. Stop-condition flags — current
+
+| Flag | Value | Basis |
+|---|---|---|
+| `STAGING_SUPABASE_CREATED` | ✅ **YES** | staging ref `vfewnfwyagcxtaxbmwqb`; JWKS served; auth settings returned 200 with the staging key |
+| `STAGING_DATABASE_IDENTIFIED` | ❌ **NO** | no `DATABASE_URL` supplied; `SELECT current_database()` not run |
+| `STAGING_SUPABASE_ISOLATED` | ✅ **YES** | dev key rejected by staging with 401; distinct ref and key |
+| `STAGING_AUTH_REACHABLE` | ✅ **YES** | `/auth/v1/.well-known/jwks.json` 200, ES256; app-derived URL matches |
+| `STAGING_STORAGE_VERIFIED` | ⚠️ **PARTIAL** | storage API 200 and anonymous-safe, but bucket existence unconfirmed and no upload/sign/download performed |
+| `SECRETS_CLEAN` | ✅ **YES** | scanner CLEAN on all scopes; no pasted value is in the repository or its history |
+
+**Four of six proven. The two that remain both need the rotated secret key or a
+database connection string — neither of which should be sent to me.**
+
+### Rotated-key caveat
+
+Even once the key is rotated and storage is verified, the isolation proof in §3
+should be re-run against the **new** project's keys, because §3 used the key that
+is now being rotated. The project ref and URL will not change, so the *project*
+isolation finding stands; only the key-level check would need repeating.
+
 
 first design matches the existing architecture** and requires no application
 change. Recommend confirming before any staging deploy.
