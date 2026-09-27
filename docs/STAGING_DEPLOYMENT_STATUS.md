@@ -422,6 +422,50 @@ not weakened and no allow-list entry was added.
 Backend test count 821 → **830**; Redis ON and OFF both green. Full detail in
 **`docs/STAGING_SUPABASE_VALIDATION.md`** §8.
 
+## B.10 P2A-5 — environment selection is now explicit and fails closed
+
+**Status: `STAGING_READY_FOR_DEPLOYMENT` unchanged (still BLOCKED_EXTERNAL), but
+the silent-fallback hazard is closed.** `.env.staging` is still absent — the
+credentials were rotated and never reached me — so the database phases remain
+blocked, but the mechanism that made that state *dangerous* is fixed.
+
+`Settings.model_config` hardcoded `env_file=".env"`, which made this possible with
+no warning:
+
+```text
+ENVIRONMENT=staging → .env read anyway → development DATABASE_URL
+                    → service starts on localhost → /health returns 200
+```
+
+Selection is now driven by the `ENVIRONMENT` variable: `development` reads `.env`,
+`staging` reads `.env.staging`, `production` reads `.env.production`, `test` reads
+no file, and an unrecognised value reads no file. `staging` and `production`
+**refuse to start** when their file is absent, raising a dedicated
+`ConfigurationError` whose message names the file and states the reason. No
+`set -a; source` is required — the earlier approach depended on shell state.
+
+**29 new tests**, each in a `tmp_path` workspace so the developer's real `.env` is
+never touched, and **mutation-verified**: restoring the old hardcoded behaviour
+makes 9 of them fail, including the critical "staging + `.env` present +
+`.env.staging` absent must FAIL" case.
+
+Two behaviours worth recording because they were got wrong first and are now
+pinned by tests:
+
+- An **unset** `ENVIRONMENT` must read `.env`, or a contributor who exports nothing
+  silently loses their configuration.
+- A **typo** like `stagng` raises `ValidationError` because `environment` is a
+  `Literal`. That is better than the quiet fallback originally planned, and it is
+  asserted so it cannot drift into something laxer.
+
+Full detail, per-environment tables and the precedence rules:
+**`docs/ENVIRONMENT_CONFIGURATION.md`**.
+
+Regression: **859 backend** (830 + 29) with Redis ON and OFF, 248/248 web, ruff,
+format, alembic check, typecheck, lint and build clean, secrets CLEAN ×3. No
+existing test modified or weakened.
+
+
 
 
 

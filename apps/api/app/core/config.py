@@ -7,11 +7,29 @@ credentials stay server-side on Render and are never exposed to the browser.
 
 from __future__ import annotations
 
+import os
+import pathlib
 from functools import lru_cache
 from typing import Annotated, Literal
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    DotEnvSettingsSource,
+    NoDecode,
+    SettingsConfigDict,
+)
+
+
+class ConfigurationError(RuntimeError):
+    """Configuration is missing for an environment that refuses to fall back.
+
+    A dedicated type, not a bare `RuntimeError`, so startup handling and the tests
+    can distinguish "this deployment is not configured" from "this deployment
+    crashed". It is deliberately NOT a `ValidationError`: the settings are not
+    invalid, the configuration source is absent, and the fix is to create a file or
+    export variables rather than to correct a value.
+    """
 
 
 def _split_list(value: object) -> list[str]:
@@ -46,9 +64,56 @@ def _split_list(value: object) -> list[str]:
     return [str(value)]
 
 
+#: Which env file each environment reads. Keyed on the value of `ENVIRONMENT`.
+#:
+#: `None` means "read no file at all", which is the correct behaviour for `test`
+#: and for a deployed service: both receive every value as a real environment
+#: variable from CI or from the host's dashboard, so there is nothing to read and
+#: nothing that could be stale.
+#:
+#: `development` keeps the historical `.env`, so the existing developer workflow
+#: is unchanged. `staging` and `production` name their own file, and the rule
+#: below is that neither may fall back to `.env`.
+ENV_FILE_FOR_ENVIRONMENT: dict[str, str | None] = {
+    "development": ".env",
+    "staging": ".env.staging",
+    "production": ".env.production",
+    "test": None,
+}
+
+#: Environments where a missing configuration file is a startup failure rather
+#: than a default. `development` is excluded on purpose: a new contributor must be
+#: able to run the suite before creating any file at all.
+FAIL_CLOSED_ENVIRONMENTS = frozenset({"staging", "production"})
+
+
+def resolve_env_file(environment: str | None) -> str | None:
+    """The env file for an environment, or None to read no file.
+
+    Reads the process environment directly rather than taking `environment` as
+    authoritative, because the whole point is that the OPERATOR's choice decides.
+    `ENV_FILE` overrides the mapping, for a deployment that wants a differently
+    named file without a code change.
+
+    An unset ENVIRONMENT reads `.env`, because that is the field's own default
+    and a contributor who exports nothing must get the behaviour they had
+    before this existed. An UNRECOGNISED environment reads no file: guessing
+    `.env` there would recreate exactly the bug this replaces, where a
+    configuration nobody expected becomes the development one.
+    """
+    override = os.getenv("ENV_FILE")
+    if override:
+        return override
+    return ENV_FILE_FOR_ENVIRONMENT.get(environment or "development")
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # No env_file here on purpose. pydantic-settings would otherwise read
+        # `.env` unconditionally, which meant ENVIRONMENT=staging still loaded
+        # the DEVELOPMENT file and connected to localhost while appearing
+        # healthy. The file is chosen by `settings_customise_sources` below, from
+        # the environment, and staging fails closed when its file is absent.
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
@@ -56,6 +121,67 @@ class Settings(BaseSettings):
 
     environment: Literal["development", "staging", "production", "test"] = "development"
     debug: bool = False
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls,
+        init_settings,
+        env_settings,
+        dotenv_settings,
+        file_secret_settings,
+    ):
+        """Choose the env file from the environment, and fail closed when absent.
+
+        This replaces pydantic-settings' unconditional `env_file=".env"`. The
+        dangerous sequence it made possible was:
+
+            ENVIRONMENT=staging  ->  .env still read  ->  localhost database
+                                 ->  the service starts and looks healthy
+
+        Nothing warned, because the development file was read successfully. The
+        invariant now is that `staging` and `production` read their OWN file and
+        never `.env`, and that a missing file is a startup error rather than a
+        silent downgrade to development defaults.
+
+        Precedence is unchanged in the ways that matter: real environment
+        variables still beat the file, and explicit keyword arguments still beat
+        everything. Only the FILE choice became environment-driven.
+        """
+        environment = os.getenv("ENVIRONMENT")
+        env_file = resolve_env_file(environment)
+
+        if env_file is None:
+            # `test`, an unknown value, or ENV_FILE="". Real environment
+            # variables are the only source, which is what CI and a deployed
+            # service both provide.
+            return (
+                init_settings,
+                env_settings,
+                file_secret_settings,
+            )
+
+        if environment in FAIL_CLOSED_ENVIRONMENTS and not pathlib.Path(env_file).is_file():
+            raise ConfigurationError(
+                f"ENVIRONMENT={environment} requires the configuration file "
+                f"{env_file!r}, which does not exist in {pathlib.Path.cwd()}. "
+                f"Refusing to start rather than fall back to a development "
+                f"configuration: a staging service reading .env would connect to "
+                f"the development database and would look healthy while doing it. "
+                f"Create {env_file} (see .env.staging.example), or set the "
+                f"configuration as real environment variables."
+            )
+
+        return (
+            init_settings,
+            env_settings,
+            DotEnvSettingsSource(
+                settings_cls,
+                env_file=env_file,
+                env_file_encoding=settings_cls.model_config.get("env_file_encoding", "utf-8"),
+            ),
+            file_secret_settings,
+        )
 
     api_v1_prefix: str = "/api/v1"
 
