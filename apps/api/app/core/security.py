@@ -249,12 +249,34 @@ class SupabaseTokenVerifier:
 
     def _get_jwk_client(self) -> Any:
         if self._jwk_client is None:
+            import ssl
+
+            import certifi
             from jwt import PyJWKClient
+
+            # WHY AN EXPLICIT CERTIFI CONTEXT, AND WHY IT CHANGES NOTHING ABOUT
+            # VERIFICATION:
+            #
+            # PyJWKClient fetches over urllib with the interpreter's default SSL
+            # context. On a stock python.org macOS installation that context has
+            # NO CA bundle until "Install Certificates.command" is run, so every
+            # JWKS fetch failed with CERTIFICATE_VERIFY_FAILED and a perfectly
+            # valid token was answered 401 "Invalid authentication token" - the
+            # service looked like it rejected credentials when it simply could not
+            # reach the keys.
+            #
+            # ``ssl.create_default_context`` is the STRICT default: certificate
+            # verification required, hostname checking on, no way to disable
+            # either. Pointing it at certifi's CA bundle makes the trust store
+            # identical on macOS, Linux and the Render image. This must never
+            # become CERT_NONE/check_hostname=False - a JWKS fetch that skips
+            # verification would accept a forged key set.
+            context = ssl.create_default_context(cafile=certifi.where())
 
             # cache_keys=True keeps the keys in memory. Supabase rotates signing
             # keys, and PyJWKClient refetches on an unknown kid, so rotation does
             # not need a restart.
-            self._jwk_client = PyJWKClient(self.jwks_url, cache_keys=True)
+            self._jwk_client = PyJWKClient(self.jwks_url, cache_keys=True, ssl_context=context)
         return self._jwk_client
 
     @property

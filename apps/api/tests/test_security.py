@@ -563,3 +563,58 @@ class TestHorizontalPrivilegeEscalation:
     def test_allows_an_admin_to_read_across_users(self):
         p = Principal("uid-1", None, Role.ADMIN, {})
         assert resolve_owned_user_id(p, "uid-2") == "uid-2"
+
+
+class TestJwksTlsContext:
+    """The JWKS fetch must present a real, verified trust store - and never less.
+
+    WHY THIS TEST EXISTS: PyJWKClient defaults to urllib's default SSL context.
+    On a stock python.org macOS installation that context holds NO CA bundle, so
+    every real token was answered 401 "Invalid authentication token" while the
+    log showed CERTIFICATE_VERIFY_FAILED. The fix pins the trust store to
+    certifi's bundle. The failure mode to guard against is the lazy fix - a
+    context with verification disabled - which would accept a forged key set, so
+    this test asserts the STRICT defaults rather than merely "a context exists".
+    """
+
+    def test_jwk_client_receives_a_verifying_certifi_context(self, monkeypatch):
+        import ssl
+
+        captured: dict[str, object] = {}
+
+        class FakeJwkClient:
+            def __init__(self, uri: str, **kwargs: object) -> None:
+                captured["uri"] = uri
+                captured.update(kwargs)
+
+        import jwt
+
+        monkeypatch.setattr(jwt, "PyJWKClient", FakeJwkClient)
+
+        verifier = SupabaseTokenVerifier(Settings(_env_file=None, supabase_url=PROJECT_URL))
+        verifier._get_jwk_client()
+
+        assert captured["uri"] == f"{PROJECT_URL}/auth/v1/.well-known/jwks.json"
+        context = captured.get("ssl_context")
+        assert isinstance(context, ssl.SSLContext), "the JWKS client must get an SSL context"
+        # Certificate verification and hostname checking must BOTH be on.
+        assert context.verify_mode == ssl.CERT_REQUIRED
+        assert context.check_hostname is True
+        # And it must actually carry a CA bundle (certifi's).
+        assert context.get_ca_certs(), "the context was created without CA certificates"
+        assert captured.get("cache_keys") is True
+
+    def test_context_is_built_from_certifi(self, monkeypatch):
+        import certifi
+
+        contexts: list[object] = []
+        real_create = __import__("ssl").create_default_context
+
+        def spy(cafile: str | None = None, **kwargs: object):
+            contexts.append(cafile)
+            return real_create(cafile=cafile, **kwargs)
+
+        monkeypatch.setattr("ssl.create_default_context", spy)
+        verifier = SupabaseTokenVerifier(Settings(_env_file=None, supabase_url=PROJECT_URL))
+        verifier._get_jwk_client()
+        assert contexts == [certifi.where()]

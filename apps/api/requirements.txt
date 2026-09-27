@@ -48,6 +48,12 @@ Pillow==12.3.0
 
 # ------------------------------------------------------------------ HTTP
 httpx==0.28.1
+# The CA bundle the JWKS client builds its SSL context from. httpx already
+# depends on certifi, but app code imports it directly (app/core/security.py), so
+# it is declared here rather than relied on transitively - a resolution change in
+# httpx must not be able to remove the trust store out from under token
+# verification.
+certifi==2026.5.20
 resend==2.47.0
 
 # -------------------------------------------------------------------- ops
