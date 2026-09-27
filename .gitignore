@@ -22,6 +22,13 @@
 # The negation must come AFTER the wildcards, or git applies them in the other
 # order and the templates are ignored too.
 !.env.example
+# The staging template is the same kind of file and is caught by `.env.*` above,
+# so it needs its own negation. Without this line it is silently ignored: the
+# file exists on disk, looks correct, and never reaches the repository.
+!.env.staging.example
+# Scoped path because this rule lives in the ROOT .gitignore, and a negation
+# matches by path relative to the repository root.
+!apps/web/.env.staging.example
 
 # Private keys, in case a PEM is ever generated inside the working tree. The local
 # development auth key lives in the temp directory, not here, but a rule costs

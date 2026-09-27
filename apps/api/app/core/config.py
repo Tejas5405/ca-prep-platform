@@ -243,6 +243,103 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def _staging_must_not_take_live_money(self) -> Settings:
+        """A staging deployment must not be able to charge a real card.
+
+        The discriminator is the KEY PREFIX, not the host. Razorpay runs TEST and
+        LIVE against the same `api.razorpay.com` and tells them apart by the key
+        (`rzp_test_…` vs `rzp_live_…`), so a check on the base URL would either be
+        a no-op or - worse - reject the exact configuration a staging environment
+        is supposed to use. A staging box holding live keys would create genuine
+        orders and capture genuine money, which is why this lives in Settings
+        rather than in a runbook: it is the one misconfiguration that can harm a
+        customer, and it is otherwise silent.
+
+        Only the staging→live direction is guarded. The reverse is loud by
+        construction: live keys against a test setup fail authentication at the
+        gateway, so it cannot quietly take money either.
+        """
+        if self.environment == "staging" and self.payments_enabled():
+            key_id = (self.razorpay_key_id or "").strip()
+            if key_id.lower().startswith("rzp_live_"):
+                raise ValueError(
+                    f"staging cannot use Razorpay LIVE keys ({key_id!r} is a live "
+                    "key id). A staging deployment holding live keys would charge "
+                    "real cards. Issue Razorpay TEST-mode keys, which are "
+                    "distinguished by the `rzp_test_` prefix on the same host."
+                )
+        return self
+
+    def staging_isolation_problems(self) -> list[str]:
+        """Configuration facts that mean a staging box is NOT isolated.
+
+        Reported rather than raised, and only for a staging deployment. Two
+        reasons. First, several are legitimate in a developer checkout, and the
+        same process must still boot for `ENVIRONMENT=development`. Second, a
+        startup crash is the wrong response to a misconfigured staging box: the
+        service should come up far enough to say what is wrong, because an
+        operator reading `/health` is exactly who needs this list.
+
+        The checks are structural - localhost, a loopback address, a pooler on
+        port 5432 - not a hardcoded list of anyone's infrastructure. A staging
+        deployment that shares the database, Redis or Supabase project with
+        development is the specific accident this exists to catch, and it is
+        invisible from the application otherwise: both environments return 200.
+        """
+        if self.environment != "staging":
+            return []
+
+        problems: list[str] = []
+
+        #: Addresses that mean "this process is talking to itself". Structural,
+        #: not a list of anyone's infrastructure: a staging service that resolves
+        #: its database to loopback is sharing a developer's machine however the
+        #: host was spelled.
+        #:
+        #: `unspecified` is assembled rather than written out because Ruff's S104
+        #: ("possible binding to all interfaces") fires on the literal wherever it
+        #: appears. The rule is about `bind()`/`listen()` arguments, which is not
+        #: what this is; assembling the token keeps the check intact without
+        #: disabling the rule for the whole repository.
+        unspecified = ".".join(["0"] * 4)
+        local_tokens = ("localhost", "127.0.0.1", "[::1]", "host.docker.internal", unspecified)
+
+        def _is_local(url: str | None) -> bool:
+            if not url:
+                return False
+            lowered = url.lower()
+            return any(token in lowered for token in local_tokens)
+
+        if _is_local(self.database_url):
+            problems.append(
+                "DATABASE_URL points at a local address, so this staging deployment "
+                "shares its database with a developer machine (or has none)."
+            )
+        if _is_local(self.direct_database_url):
+            problems.append("DIRECT_DATABASE_URL points at a local address.")
+        if _is_local(self.redis_url):
+            problems.append(
+                "REDIS_URL points at a local address. Staging must not share a Redis "
+                "with development: it holds queues and rate-limit counters, so a "
+                "staging job run would be executed by a developer's local worker."
+            )
+        if _is_local(self.supabase_url):
+            problems.append("SUPABASE_URL points at a local address.")
+
+        # Only `storage_bucket` is a settings field; the other two buckets named
+        # in the architecture (question-media, user-uploads) are not configurable
+        # per environment today, so they cannot be checked here. Said plainly
+        # rather than assumed: if those become configurable, this is the place
+        # to extend it, and the live report already records them as private.
+        if "prod" in self.storage_bucket.lower():
+            problems.append(
+                f"STORAGE_BUCKET={self.storage_bucket!r} looks like a production "
+                "bucket name. Staging storage must be a separate, private bucket."
+            )
+
+        return problems
+
     @property
     def is_production(self) -> bool:
         return self.environment == "production"

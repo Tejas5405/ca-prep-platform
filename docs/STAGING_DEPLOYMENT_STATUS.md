@@ -1,8 +1,17 @@
 # Staging Deployment Status
 
-**Milestone:** P2 — Staging Deployment & Full Staging E2E
-**Baseline commit:** `fbabeaa` (`main`, == `origin/main`, CI green)
-**Status: BLOCKED at Phase 0. Nothing has been deployed.**
+**Milestone:** P2A — prepare for an isolated staging environment
+**Prior milestone:** P2 (blocked at Phase 0) — recorded in §A below
+**Baseline commit:** `51df3e0` → P2A
+**Status:**
+
+```
+STAGING_READY_FOR_DEPLOYMENT = NO   ← STAGING_BLOCKED_EXTERNAL
+```
+
+**Nothing has been deployed.** P2A completed the configuration and audit work
+that does not require infrastructure. The blockers in §A are unchanged, and no
+code change has made any of them go away — because none of them can be.
 
 ---
 
@@ -163,6 +172,154 @@ CI_GREEN        = YES    (runs 36350781773 and 36351190711, all 4 jobs)
 
 **Production readiness is not claimed and is not assessable.** Nothing in this
 milestone changed application architecture, credentials, schema or code.
+
+---
+
+# §A — P2 (blocked at Phase 0): the pre-flight findings
+
+Everything in this section was established by the P2 pre-flight and is
+**unchanged** by P2A. It is retained because it is the evidence for
+`STAGING_BLOCKED_EXTERNAL`.
+
+## A.1 What does not exist
+
+No staging resource of any kind existed. Verified, not assumed:
+
+| # | Component | Finding |
+|---|---|---|
+| 1 | **Frontend** | No `vercel.json`, no SPA rewrite, **no deployed URL** (DG-1, DG-6) |
+| 2 | **Backend** | `render.yaml` is a blueprint only; sets `ENVIRONMENT: production` literally (DG-8) |
+| 3 | **Worker** | Depends on Redis, which is commented out of the blueprint (DG-4) |
+| 4 | **Database** | **Local** Postgres only (DG-2) |
+| 5 | **Auth + Storage** | **One real shared Supabase project** (DG-3) |
+| 6 | **Redis** | **Local** only (DG-4) |
+| 7 | **Payments** | All three `RAZORPAY_*` are **EMPTY** |
+| 8 | **Observability** | No error tracker or uptime monitor (DG-5) |
+
+No `STAGING_*` variable existed anywhere in the repository.
+
+## A.2 Credential state at P2 (local dev `.env`, values never printed)
+
+`DATABASE_URL` → `localhost:5432` (local) · `REDIS_URL` → local · `SUPABASE_URL`
+→ real shared project · `SUPABASE_SECRET_KEY` populated · `AI_PROVIDER_API_KEY`
+populated · **`RAZORPAY_KEY_ID` / `_SECRET` / `_WEBHOOK_SECRET` all EMPTY** ·
+`RESEND_API_KEY` empty.
+
+---
+
+# §B — P2A results
+
+## B.1 Deliverables
+
+| File | Status |
+|---|---|
+| `docs/STAGING_ENVIRONMENT_REFERENCE.md` | ✅ created — every variable, classified, read from the code |
+| `docs/STAGING_DEPLOYMENT_INPUTS.md` | ✅ created — 11 READY, 3 CODE_CHANGE_REQUIRED, 7 MISSING_OWNER_INPUT, 9 MISSING_EXTERNAL_RESOURCE |
+| `docs/STAGING_DEPLOYMENT_STATUS.md` | ✅ this file, updated |
+| `.env.staging.example` | ✅ created — 24 variables, placeholders only |
+| `apps/web/.env.staging.example` | ✅ created — 6 variables |
+| `apps/api/app/core/config.py` | ✅ 2 guards, 18 tests |
+| `apps/api/tests/test_staging_guards.py` | ✅ 18 cases |
+
+## B.2 Two findings worth the owner's attention
+
+**1. Razorpay TEST vs LIVE is decided by key prefix, not host.** Both modes use
+`api.razorpay.com`; only `rzp_test_` vs `rzp_live_` distinguishes them. The
+guard keys on that prefix, so a staging box holding live keys **refuses to
+boot**. A URL-based guard — the obvious implementation — would have been a no-op
+or would have rejected the correct configuration. Caught before it shipped.
+
+**2. Two frontend variables are undeclared and fall back to production values.**
+`VITE_SITE_URL` and `VITE_SUPPORT_EMAIL` are read through casts because they are
+absent from `ImportMetaEnv`. A typo in either silently yields
+`https://caprep.in` / `support@caprep.in` — so a staging deploy could emit
+production URLs, or mail a real person. Recorded as `CODE_CHANGE_REQUIRED`;
+**not** fixed here, because it is a production frontend typing change and P2A is
+configuration-only. It is two lines and should be its own commit before a
+staging frontend is deployed.
+
+## B.3 Regression results (P2A)
+
+| Gate | Result |
+|---|---|
+| `ruff check .` | ✅ All checks passed |
+| `ruff format --check .` | ✅ 154 files formatted |
+| `alembic check` / `heads` | ✅ no new operations / `6c3f7b0a0c13` |
+| `pytest` Redis **ON** | ✅ **821 passed**, 246 skipped |
+| `pytest` Redis **OFF** | ✅ **821 passed**, 246 skipped |
+| `npm test` | ✅ **248 / 248**, 19 files |
+| `npm run typecheck` / `lint` / `build` | ✅ exit 0 |
+| `check_secrets.py` ×3 | ✅ **CLEAN** |
+
+821 = the previous 803 + 18 new guard cases. No existing test was modified,
+skipped or weakened.
+
+> One suite failure appeared mid-milestone and was **my own local artifact**: an
+> earlier build of `apps/web/dist` had been made with the Vitest fake key, so
+> `test_the_built_bundle_carries_the_publishable_key_and_no_secret` correctly
+> reported that the real publishable key was absent from the bundle. Fixed by
+> rebuilding from the real local values. A useful reminder that `dist/`-scanning
+> tests assert against whatever was last built, not against source.
+
+## B.4 Readiness matrix — recomputed, still nothing claimed
+
+| Flag | Value | Basis |
+|---|---|---|
+| `STAGING_DEPLOYED` | **NO** | no staging host exists |
+| `STAGING_AUTH_VERIFIED` | **NO** | no staging Auth project |
+| `STAGING_DATABASE_VERIFIED` | **NO** | no staging database |
+| `STAGING_STORAGE_VERIFIED` | **NO** | no staging buckets |
+| `STAGING_REDIS_VERIFIED` | **NO** | no staging Redis |
+| `STAGING_WORKER_VERIFIED` | **NO** | no deployed worker |
+| `STAGING_OCR_VERIFIED` | **NO** | requires a deployed worker |
+| `STAGING_AI_VERIFIED` | **NO** | no staging-scoped credential |
+| `STAGING_PAYMENT_TEST_VERIFIED` | **NO** | Razorpay TEST keys absent |
+| `STUDENT_E2E_VERIFIED` | **NO** | no staging URL |
+| `ADMIN_E2E_VERIFIED` | **NO** | no staging URL |
+| `SECURITY_VERIFIED` | **NOT_TESTED** | inspects a deployed bundle |
+| `OBSERVABILITY_VERIFIED` | **NOT_TESTED** | nothing deployed to observe |
+
+Unchanged and still proven:
+
+```
+LOCAL_GREEN     = YES    (248 web, 821 backend, Redis ON and OFF)
+CI_CONFIGURED   = YES
+CI_EXECUTED     = YES
+CI_GREEN        = YES    (runs 36350781773 and 36351190711)
+```
+
+**`STAGING_READY_FOR_DEPLOYMENT = NO`.** Production readiness is not claimed and
+is not assessable.
+
+## B.5 Next milestone
+
+P2B begins when the owner has provisioned the nine external resources, in this
+order — the first removes the largest risk:
+
+1. **Staging Supabase project** (+ database, Auth, private buckets)
+2. **Staging Redis**
+3. **Razorpay TEST keys**
+4. **Staging AI key**
+5. **Hosting decisions** → Render staging environment, frontend project
+6. **Domains** → CORS allow-list, OAuth redirect URLs
+
+P2A deliberately created **no** local mock environment and **no** fake
+infrastructure. The value now comes from testing the real integrations.
+
+
+## A.3 What P2A changed, and what it did not
+
+| Changed in P2A | Effect on the blockers |
+|---|---|
+| `.env.staging.example`, `apps/web/.env.staging.example` | **None.** They record the names; the values must still be provisioned |
+| `Settings.staging_isolation_problems()` | Turns a silent shared-resource mistake into a reported one. Does not create a staging database |
+| `_staging_must_not_take_live_money` | Prevents a staging box from charging a real card. Does not create Razorpay TEST keys |
+| `docs/STAGING_ENVIRONMENT_REFERENCE.md`, `docs/STAGING_DEPLOYMENT_INPUTS.md` | Turns "blocked" into a specific, ordered provisioning list |
+
+**None of the nine `MISSING_EXTERNAL_RESOURCE` items moved.** That is the honest
+outcome: P2A was the work that could be done without infrastructure, and it is
+now done.
+
 
 ---
 
