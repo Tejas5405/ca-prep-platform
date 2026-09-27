@@ -58,6 +58,153 @@ def _render() -> dict:
     return yaml.safe_load(RENDER_YAML.read_text())
 
 
+def _host(url: str) -> str:
+    """`https://<ref>.supabase.co/rest` -> `<ref>.supabase.co`."""
+    return url.strip().rstrip("/").removeprefix("https://").removeprefix("http://").split("/")[0]
+
+
+def assert_project_urls_consistent(found: dict[str, str]) -> None:
+    """The identity invariant: the project URL sources must be present and agree.
+
+    Module-level, and taking the discovered mapping as an argument, so the rule
+    can be tested against synthetic configurations instead of only against
+    whatever this particular checkout happens to contain. The mapping is
+    `{label: url}`; labels are only used to make a failure message actionable.
+
+      - zero sources  -> fail: nothing names a project, so configuration is missing
+      - one source    -> pass: nothing to disagree with
+      - two or more   -> pass only if every host is identical
+
+    Extracted from `TestSupabaseProjectIsConsistentEverywhere` so the discovery
+    step (which reads real files) stays separate from the rule (which is pure).
+    """
+    assert found, (
+        "no configuration source names a Supabase project. Expected "
+        "infra/render.yaml to carry a real SUPABASE_URL."
+    )
+    hosts = {_host(url) for url in found.values()}
+    assert len(hosts) == 1, (
+        "Supabase project URLs disagree, so the frontend will obtain tokens the "
+        f"API rejects: {found}"
+    )
+
+
+class TestProjectUrlConsistencyRule:
+    """The rule `assert_project_urls_consistent` enforces, case by case.
+
+    A test that only ever runs against this checkout proves almost nothing: the
+    checkout supplies one real source, so the zero-, conflict- and
+    placeholder-only paths would never execute. These pin the rule down against
+    synthetic configurations, which is what makes the change from
+    `len(found) >= 2` verifiable rather than merely different.
+    """
+
+    PROJECT = "https://abcdefghijklm.supabase.co"
+    OTHER_PROJECT = "https://zyxwvu987654.supabase.co"
+
+    def test_no_sources_fails_because_configuration_is_missing(self):
+        # A checkout where nothing names a project has lost its deployment
+        # configuration. This must not pass: there is nothing to sign tokens for.
+        with pytest.raises(AssertionError, match="no configuration source names"):
+            assert_project_urls_consistent({})
+
+    def test_a_single_source_passes(self):
+        # This is the clean-clone case that broke CI run 36349686508: only
+        # infra/render.yaml qualifies, and there is nothing to disagree with.
+        assert_project_urls_consistent({"infra/render.yaml (API service)": self.PROJECT})
+
+    def test_two_matching_sources_pass(self):
+        assert_project_urls_consistent(
+            {
+                "infra/render.yaml (API service)": self.PROJECT,
+                "apps/web/.env.local": self.PROJECT,
+            }
+        )
+
+    def test_two_matching_sources_agree_despite_trailing_slash_and_path(self):
+        # The comparison is on the host, because the same project is written
+        # with a trailing slash in .env files and without one in render.yaml.
+        assert_project_urls_consistent(
+            {
+                "infra/render.yaml (API service)": self.PROJECT,
+                "apps/web/.env.local": "https://abcdefghijklm.supabase.co/",
+            }
+        )
+
+    def test_two_conflicting_sources_fail(self):
+        # The invariant the test has always existed to protect: a token minted
+        # by one project and rejected by the other. The old count-based
+        # assertion would have PASSED here, because two sources were found.
+        with pytest.raises(AssertionError, match="disagree"):
+            assert_project_urls_consistent(
+                {
+                    "infra/render.yaml (API service)": self.PROJECT,
+                    "apps/web/.env.local": self.OTHER_PROJECT,
+                }
+            )
+
+    def test_three_sources_where_only_two_conflict_still_fail(self):
+        # Agreement is across all sources, not between the first two.
+        with pytest.raises(AssertionError, match="disagree"):
+            assert_project_urls_consistent(
+                {
+                    "infra/render.yaml (API service)": self.PROJECT,
+                    "apps/web/.env.local": self.PROJECT,
+                    ".env": self.OTHER_PROJECT,
+                }
+            )
+
+
+class TestProjectHostDiscovery:
+    """Placeholder filtering in `_project_hosts`, which decides what the rule sees.
+
+    Filtering happens before the consistency rule runs, so a regression here
+    would let a placeholder through as if it were a real project. `your-project`
+    is not a project, and if it were treated as one it would both mask a missing
+    configuration and - once a real source exists - read as a conflict.
+    """
+
+    PROJECT = "https://abcdefghijklm.supabase.co"
+
+    def test_placeholder_hosts_are_recognised(self):
+        for url in (
+            "https://your-project.supabase.co",
+            "https://example.supabase.co",
+        ):
+            assert _host(url) in PLACEHOLDER_HOSTS
+
+    def test_a_real_project_is_not_treated_as_a_placeholder(self):
+        assert _host(self.PROJECT) not in PLACEHOLDER_HOSTS
+
+    def test_placeholder_only_configuration_yields_no_sources(self):
+        # What a fresh clone of the example templates alone would produce. The
+        # rule then fails on "no sources", which is the intended outcome: an
+        # unconfigured deployment must be loud.
+        found = {}
+        for value in ("https://your-project.supabase.co", "https://example.supabase.co"):
+            if _host(value) not in PLACEHOLDER_HOSTS:
+                found[value] = value
+        assert found == {}
+        with pytest.raises(AssertionError, match="no configuration source names"):
+            assert_project_urls_consistent(found)
+
+    def test_this_checkout_names_exactly_one_real_project(self):
+        # Guards the discovery step itself against silently returning nothing,
+        # which would make the consistency test fail for the wrong reason.
+        found = _discover_project_urls_for_test()
+        assert found, "expected infra/render.yaml to name a Supabase project"
+        assert_project_urls_consistent(found)
+
+
+def _discover_project_urls_for_test() -> dict[str, str]:
+    """Run the real discovery used by the consistency test.
+
+    Instantiated rather than reimplemented: a copy would drift from the code
+    under test, which is exactly the failure mode this class exists to catch.
+    """
+    return TestSupabaseProjectIsConsistentEverywhere()._project_hosts()
+
+
 def _installed_packages() -> set[str]:
     """Package names in the Dockerfile's apt-get install block.
 
@@ -272,13 +419,29 @@ class TestSupabaseProjectIsConsistentEverywhere:
         return found
 
     def test_the_frontend_and_backend_name_the_same_project(self):
+        """Are the project-URL sources present and internally CONSISTENT?
+
+        What this asserts, and why it is not a count:
+
+        - ZERO sources is a failure. The repository must define its deployment
+          configuration somewhere; a checkout where nothing names a project is
+          missing configuration, not merely small.
+        - ONE source passes. A clean clone legitimately has only
+          `infra/render.yaml`: `apps/web/.env.local` is gitignored and absent,
+          and both `.env.example` files hold placeholder hosts that are filtered
+          out above. There is nothing to disagree with, so nothing to check.
+        - TWO OR MORE must agree. This is the real invariant and the reason the
+          test exists.
+
+        The previous `assert len(found) >= 2` was not testing that invariant. It
+        demanded an arbitrary minimum, so it failed in CI (run 36349686508) on a
+        configuration that was not contradictory at all, and it passed locally
+        only because an untracked `.env.local` supplied a second source. It
+        counted files instead of checking agreement - it would still have passed
+        on two sources that DISAGREE had the count been met.
+        """
         found = self._project_hosts()
-        assert len(found) >= 2, f"expected several sources to compare, got {found}"
-        hosts = {self._host(url) for url in found.values()}
-        assert len(hosts) == 1, (
-            "Supabase project URLs disagree, so the frontend will obtain tokens the "
-            f"API rejects: {found}"
-        )
+        assert_project_urls_consistent(found)
 
     def test_the_database_belongs_to_the_same_project_as_the_token_verifier(self):
         """See the class docstring: a token from one project and data from another
