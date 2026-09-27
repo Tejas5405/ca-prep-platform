@@ -288,8 +288,25 @@ CI_EXECUTED     = YES
 CI_GREEN        = YES    (runs 36350781773 and 36351190711)
 ```
 
-**`STAGING_READY_FOR_DEPLOYMENT = NO`.** Production readiness is not claimed and
+**STAGING_READY_FOR_DEPLOYMENT = NO.** Production readiness is not claimed and
 is not assessable.
+
+## B.6 P2A-2 — Supabase staging connection: BLOCKED
+
+An attempt to connect the staging configuration to a new Supabase project could
+not proceed: the material supplied was a **Google OAuth client**, not a Supabase
+credential, and contained none of the five values the isolation proof requires.
+
+- A `GOCSPX-` Google client secret was exposed in plaintext. **It is not in the
+  repository** — `git grep` over `HEAD` finds nothing, the tree is clean, and all
+  three secret scans are CLEAN. It still needs rotating at source, because being
+  out of the repository is not the same as not being exposed.
+- Full findings, the open question about where a Google client secret should
+  live, and the five values needed to unblock: **`docs/STAGING_SUPABASE_SETUP.md`**.
+
+No database was connected, no migration was run, and no development resource was
+touched. All gates re-verified green: 821 backend, 248 web, secrets CLEAN ×3.
+
 
 ## B.5 Next milestone
 
