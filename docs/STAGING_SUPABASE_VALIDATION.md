@@ -1,7 +1,7 @@
 # Staging Supabase Validation
 
 **Milestone:** P2A-4 — identity, migrations, seed against STAGING
-**Baseline commit:** `e7d0366`
+**Baseline commit:** `76c0d0e`
 **Nothing deployed. No migration applied. No development resource touched.**
 
 ---
@@ -161,33 +161,109 @@ been checked against a file of that name.
 
 No test was modified, skipped or weakened. Documentation only.
 
-## 8. To unblock — one file
+## 8. Two real defects found in the staging templates
+
+Because the milestone was blocked anyway, the templates were exercised rather than
+left unverified. Doing so found two bugs that would have hit the owner directly.
+
+### 8.1 `Settings` never reads `.env.staging`
+
+`Settings.model_config` hardcodes `env_file=".env"`. Verified empirically: with
+only `.env.staging` present in the working directory, `Settings()` still loaded
+the **development** `.env`. A filled `.env.staging` file is therefore **not picked
+up automatically** — its values must be exported:
+
+```bash
+set -a; . ./.env.staging; set +a
+```
+
+Without that, a staging run silently operates on development configuration. This
+is the more dangerous of the two findings, because nothing errors: the process
+starts, connects to `localhost`, and looks healthy.
+
+### 8.2 The templates were not sourceable at all
+
+Placeholders were written as `<STAGING_PROJECT_REF>`. **`<` is a shell
+redirection operator**, so every such line is a syntax error:
+
+```
+.env.staging: line 132: syntax error near unexpected token `newline'
+```
+
+Sourcing would abort part-way through, loading *some* variables and silently
+missing the rest. Eight lines were affected across both templates.
+
+**The first fix then broke a different gate.** `__NAME__` parsed cleanly, but it
+also produced a syntactically valid DSN, so `check_secrets.py --worktree` began
+failing with `2 unexpected matches` — the scanner correctly treating a
+placeholder as a live database credential.
+
+`check_secrets.py` already recognises `your` as a placeholder marker, so the
+final convention is **`your-NAME`**, satisfying both constraints at once: valid
+shell, and allow-listed as the documented fake it is. The scanner was **not**
+weakened and no allow-list entry was added.
+
+**All three defects were found only by actually running the thing.** None is
+detectable by reading the files, and no existing gate loads them.
+
+### 8.3 Regression coverage added
+
+`TestStagingTemplatesAreLoadable` — 9 new cases:
+
+| Check | Guards against |
+|---|---|
+| template exists | a deleted template |
+| `bash -n` parses it | the `<NAME>` redirection bug |
+| no `<NAME>` on an assignment line | the same, with a clearer error |
+| still carries `your-` markers | a template filled with real values |
+| **the secret scanner stays clean** | a placeholder that reads as a live credential |
+
+**Both mutation-verified.** Reintroducing `<NAME>` fails two tests; substituting a
+realistic password for the placeholder fails the scanner test. Neither passes
+vacuously. `bash` is resolved via `shutil.which` and made absolute, so a `bash`
+earlier on `PATH` cannot decide a security-shaped check.
+
+Test count: 821 → **830**.
+
+## 9. To unblock — one file, one command
 
 ```bash
 cd "/Users/tejasraykar/Downloads/CA Version 2/ca-prep-platform"
-cp .env.staging.example .env.staging    # already gitignored
-$EDITOR .env.staging                     # paste the STAGING values; do not commit
+cp .env.staging.example .env.staging
+$EDITOR .env.staging                     # fill in; do not commit
 ```
 
-Minimum required to make Phases 2–5 runnable:
+Minimum to make Phases 2–5 runnable:
 
 | Variable | Source |
 |---|---|
 | `ENVIRONMENT=staging` | already in the template |
 | `SUPABASE_URL` | staging project URL |
-| `SUPABASE_SECRET_KEY` | rotated key, from the staging project |
-| `DATABASE_URL` | staging Connect dialog (pooler, port 6543) |
-| `DIRECT_DATABASE_URL` | staging Connect dialog (direct, port 5432) — **required**, because migrations must not run through the pooler |
+| `SUPABASE_SECRET_KEY` | the **rotated** key |
+| `DATABASE_URL` | staging Connect dialog — **pooler, port 6543** |
+| `DIRECT_DATABASE_URL` | staging Connect dialog — **direct, port 5432** |
 
-Once that file exists, the sequence is mechanical: derive the ref, prove it
-differs, read `current_database()`, then `alembic upgrade head`, then
-`alembic check`, then `python -m app.seed --check` and the two-run idempotency
-check.
+`DIRECT_DATABASE_URL` is not optional for migrations. `resolve_migration_url()`
+prefers it over `DATABASE_URL` precisely because a transaction pooler cannot hold
+the session that `alembic upgrade` needs — running DDL through the pooler is the
+classic way to get a half-applied schema.
 
-**Do not paste any of these values into the conversation.** After creating the
-file, send only: the staging project ref, and the database name from
-`SELECT current_database()`. Neither is a secret, and both are all I need to
-confirm identity before touching anything.
+**And the loading step matters (§8.1):**
+
+```bash
+set -a; . ./.env.staging; set +a
+```
+
+Without it the run uses development configuration.
+
+**Do not paste any values here.** Once the file exists, send only:
+
+- the staging **project ref**
+- the database **name** from `SELECT current_database()`
+
+Neither is a secret, and both are all that is needed to confirm identity before
+touching anything.
+
 
 
 

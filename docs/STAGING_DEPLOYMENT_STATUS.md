@@ -391,6 +391,38 @@ Regression: ruff check and format clean, alembic check clean, **821 backend with
 Redis both ON and OFF**, 248/248 web, typecheck, lint, build pass, secrets CLEAN
 ×3. No test modified, skipped or weakened.
 
+## B.9 P2A-4b — staging templates fixed after being exercised
+
+`.env.staging` is still absent (the credentials were rotated and never reached
+me), so Phases 2–9 remain blocked. But rather than leave the templates
+unverified, they were run. Doing so found **two defects that would have broken the
+owner's next attempt**:
+
+1. **`Settings` never reads `.env.staging`.** `env_file` is hardcoded to `.env`,
+   so a filled `.env.staging` is ignored and the run silently uses **development**
+   configuration — connecting to `localhost` while looking healthy. Values must be
+   exported with `set -a; . ./.env.staging; set +a`.
+2. **The templates were not sourceable.** Placeholders were written as
+   `<STAGING_PROJECT_REF>`, and `<` is a shell redirection operator, so eight
+   lines across both templates were syntax errors and sourcing aborted part-way.
+   Placeholders are now `__NAME__`.
+
+Both are invisible on review and no existing gate loads these files, so
+`TestStagingTemplatesAreLoadable` was added — 9 cases across the two templates,
+**mutation-verified** twice: reintroducing the `<NAME>` form fails two of them,
+and substituting a realistic password for a placeholder fails the scanner check.
+
+A third defect surfaced while fixing the second: the `__NAME__` form parsed
+cleanly but produced a syntactically valid DSN, so `check_secrets.py --worktree`
+failed with 2 unexpected matches — the scanner correctly treating a placeholder
+as a live database credential. `check_secrets.py` already recognises `your` as a
+placeholder marker, so the final convention is **`your-NAME`**. The scanner was
+not weakened and no allow-list entry was added.
+
+Backend test count 821 → **830**; Redis ON and OFF both green. Full detail in
+**`docs/STAGING_SUPABASE_VALIDATION.md`** §8.
+
+
 
 
 

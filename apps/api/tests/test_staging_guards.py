@@ -12,10 +12,21 @@ has to be right before the first deployment against it, not diagnosed after.
 
 from __future__ import annotations
 
+import pathlib
+import re
+import shutil
+import subprocess
+import sys
+
 import pytest
 from pydantic import ValidationError
 
 from app.core.config import Settings
+
+#: Repository root, for the staging templates. These tests read committed files
+#: rather than importing anything, so they are anchored to the repo rather than to
+#: the app package.
+ROOT = pathlib.Path("../..")
 
 STAGING_DB = "postgresql+psycopg://postgres:pw@db.stagingproject.supabase.co:5432/postgres"
 STAGING_REDIS = "redis://staging-redis.internal:6379"
@@ -168,6 +179,101 @@ class TestStagingCannotTakeLiveMoney:
             razorpay_key_secret="live_secret",
         )
         assert dev.payments_enabled() is True
+
+
+class TestStagingTemplatesAreLoadable:
+    """`.env.staging.example` must survive `set -a; . .env.staging` AND the scanner.
+
+    Found the hard way, twice. The templates originally wrote placeholders as
+    `https://<STAGING_PROJECT_REF>.supabase.co`, and `<` is a shell REDIRECTION
+    operator: `bash -n` fails and sourcing the file aborts part-way through, so an
+    operator who filled the file in and sourced it would have loaded *some*
+    variables and silently missed the rest.
+
+    The first fix, `__NAME__`, parsed cleanly but tripped the secret scanner as a
+    live database credential - correctly, since it is a syntactically valid DSN.
+    `check_secrets.py` already recognises `your` as a placeholder marker, so
+    `your-NAME` satisfies both constraints. That is the convention this test pins.
+
+    A test rather than a note because the failure is invisible on review: the
+    templates look correct, and no other gate loads them.
+    """
+
+    TEMPLATES = (
+        ROOT / ".env.staging.example",
+        ROOT / "apps/web/.env.staging.example",
+    )
+
+    def _assignment_lines(self, path: pathlib.Path) -> list[str]:
+        return [
+            line
+            for line in path.read_text().splitlines()
+            if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", line)
+        ]
+
+    @pytest.mark.parametrize("path", TEMPLATES, ids=lambda p: p.name)
+    def test_the_template_exists(self, path: pathlib.Path) -> None:
+        assert path.is_file(), f"{path} is missing"
+
+    @pytest.mark.parametrize("path", TEMPLATES, ids=lambda p: p.name)
+    def test_every_template_parses_as_a_shell_script(self, path: pathlib.Path) -> None:
+        # `bash -n` parses without executing. The exact check that caught this.
+        #
+        # Resolved with `shutil.which` and then made absolute on purpose: a bare
+        # "bash" would let a `bash` earlier on PATH decide the outcome of a
+        # security-shaped test. CI runs on Linux and this is developed on macOS,
+        # so the path is discovered rather than hardcoded to /bin/bash.
+        shell = shutil.which("bash")
+        assert shell, "bash not found; this test cannot verify sourceability"
+        result = subprocess.run(
+            [shell, "-n", str(path)], capture_output=True, text=True, check=False
+        )
+        assert result.returncode == 0, (
+            f"{path} is not sourceable: {result.stderr.strip()}\n"
+            "A placeholder written as <NAME> is a shell redirection and aborts "
+            "`set -a; . file` part-way through. Use __NAME__."
+        )
+
+    @pytest.mark.parametrize("path", TEMPLATES, ids=lambda p: p.name)
+    def test_no_assignment_uses_a_redirect_placeholder(self, path: pathlib.Path) -> None:
+        # Belt and braces, and it names the offending line rather than just
+        # reporting a syntax error with a line number the reader must map back.
+        offenders = [
+            line
+            for line in self._assignment_lines(path)
+            if re.search(r"<[A-Za-z_][A-Za-z0-9_]*>", line)
+        ]
+        assert not offenders, f"{path} uses <NAME> placeholders: {offenders}"
+
+    @pytest.mark.parametrize("path", TEMPLATES, ids=lambda p: p.name)
+    def test_the_template_still_carries_placeholders(self, path: pathlib.Path) -> None:
+        # The opposite failure: a template with real values in it. A staging
+        # template must be safe to publish, and `your-` is the marker.
+        assert "your-" in path.read_text(), f"{path} no longer looks like a template"
+
+    def test_the_templates_do_not_trip_the_secret_scanner(self) -> None:
+        """The two constraints interact, and the first fix broke the second.
+
+        `__NAME__` parsed cleanly but produced a syntactically valid DSN, so
+        `check_secrets.py` flagged it as a live database credential. Placeholders
+        must therefore satisfy the scanner's placeholder rules as well as bash's -
+        which is why the convention is `your-NAME`.
+
+        Run in `--worktree` mode because that is the mode that reads uncommitted
+        files, and a template is only ever edited uncommitted.
+        """
+        result = subprocess.run(
+            [sys.executable, "scripts/check_secrets.py", "--worktree"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, (
+            "the staging templates trip the secret scanner:\n"
+            f"{result.stdout.strip()[-800:]}\n"
+            "Placeholders must keep the `your-` marker the scanner recognises."
+        )
 
 
 class TestTheExistingFallbackGuardStillHolds:
