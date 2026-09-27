@@ -89,12 +89,20 @@ class TestHealthContract:
         assert body["checks"]["postgres"]["status"] == "down"
 
     def test_health_redis_returns_503_when_unreachable(self, client, monkeypatch):
+        """Deterministic whether or not a developer happens to run Redis.
+
+        The patch used to target ``app.core.dependencies.get_redis_client``,
+        which does NOTHING here: ``app/api/v1/health.py`` binds that name at
+        import time, so the route kept calling the real client. The test then
+        passed only because this machine had no Redis - with one running it
+        returned 200 and the ``assert 503`` failed. Patch the name the route
+        actually resolves.
+        """
+
         def exploding_client(_settings=None):
             raise RuntimeError("redis refused")
 
-        monkeypatch.setattr(
-            "app.core.dependencies.get_redis_client", exploding_client, raising=True
-        )
+        monkeypatch.setattr("app.api.v1.health.get_redis_client", exploding_client, raising=True)
         resp = client.get("/health/redis")
         assert resp.status_code == 503
         assert resp.json()["checks"]["redis"]["status"] == "down"
