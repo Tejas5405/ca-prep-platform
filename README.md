@@ -233,8 +233,8 @@ written-down form of a setup that used to be rebuilt by hand every session:
 ```bash
 bash scripts/dev-stack.sh prepare     # python deps + embedded PostgreSQL 17 + initdb
 bash scripts/dev-stack.sh up          # postgres in the FOREGROUND on 5433
-bash scripts/dev-stack.sh db-create   # caprep + caprep_test, migrate to head, seed
-bash scripts/dev-stack.sh test        # full backend suite against caprep_test
+bash scripts/dev-stack.sh db-create   # caprep + caprep_v2_test, migrate to head, seed
+bash scripts/dev-stack.sh test        # full backend suite against caprep_v2_test
 bash scripts/dev-stack.sh api         # uvicorn on 8000
 bash scripts/dev-stack.sh web         # vite on 5173
 ```

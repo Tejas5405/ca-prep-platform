@@ -16,7 +16,7 @@ fakes. That split let three classes of defect survive:
 They are skipped, not failed, when no database is configured, so the ordinary run
 stays green on a machine with nothing installed.
 
-    TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:5432/caprep_test pytest
+    TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:5432/caprep_v2_test pytest
 
 ``TEST_DATABASE_URL`` is preferred over ``DATABASE_URL`` so an integration run
 cannot accidentally point at a database with real data in it. ``DATABASE_URL`` is

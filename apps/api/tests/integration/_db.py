@@ -13,6 +13,26 @@ run second).
 So the engine's lifetime is the test's lifetime: created inside the coroutine that
 uses it, disposed before that coroutine returns. Slightly more connection setup per
 test, and no cross-loop state at all.
+
+WHY THIS MODULE REFUSES A GENERIC DATABASE NAME
+================================================
+
+``open_database`` issues ``TRUNCATE ... CASCADE`` over every table. That is a
+destructive operation, and it is aimed at whatever ``TEST_DATABASE_URL`` names.
+
+A name like ``caprep_test`` is not owned by this repository. This machine hosts
+more than one CA checkout against one PostgreSQL server, and that was not
+theoretical: a concurrent agent in a sibling checkout recreated ``caprep_test``
+from a DIFFERENT migration chain while this suite was running, and 163 tests
+failed with ``relation "users" does not exist``. The reverse accident is worse -
+two suites sharing one database would truncate each other's fixtures mid-run,
+producing failures that look like product bugs and are not.
+
+So :func:`assert_disposable_database` enforces the convention in
+``docs/ENVIRONMENT_ISOLATION.md`` at the only moment it can still prevent damage:
+before the first TRUNCATE. A name that is not recognisably this project's own
+disposable database is refused with a message naming the convention, rather than
+being truncated in the hope that it was the right one.
 """
 
 from __future__ import annotations
@@ -32,6 +52,60 @@ T = TypeVar("T")
 #: history: dropping it would make every later ``alembic`` command believe the
 #: database is empty and try to re-apply 0001.
 KEEP = frozenset({"alembic_version"})
+
+#: This repository's database-name prefix. Every disposable database it is
+#: allowed to truncate starts with this, so no other checkout's data can be
+#: reached by a name collision.
+OWNED_PREFIX = "caprep_v2_"
+
+#: Names that must never be truncated by this suite even though they are the
+#: obvious "test database" spelling, because they are shared by convention rather
+#: than owned. Refused explicitly so the error can explain WHY, rather than
+#: simply reporting an unexpected name.
+SHARED_NAMES = frozenset({"caprep", "caprep_test", "postgres", "template0", "template1"})
+
+
+class UnsafeDatabaseError(RuntimeError):
+    """Raised before any TRUNCATE when the target database is not ours to empty."""
+
+
+def database_name(url: str) -> str:
+    """The database name from a PostgreSQL URL, without the driver suffix."""
+    without_query = url.split("?", 1)[0]
+    return without_query.rstrip("/").rsplit("/", 1)[-1]
+
+
+def assert_disposable_database(url: str) -> str:
+    """Refuse to empty a database this repository does not own.
+
+    Returns the database name when it is safe, so callers can log it. Raises
+    :class:`UnsafeDatabaseError` otherwise - deliberately a hard failure rather
+    than a skip, because a skip here would report green while silently running
+    no database tests at all, which is the failure mode this project has already
+    been bitten by once (a missing driver used to skip the whole suite).
+    """
+    name = database_name(url)
+    if os.getenv("CAPREP_ALLOW_SHARED_TEST_DB") == "1":
+        return name
+    if name in SHARED_NAMES:
+        raise UnsafeDatabaseError(
+            f"Refusing to TRUNCATE the shared database {name!r}. This repository "
+            f"owns only databases named '{OWNED_PREFIX}<purpose>' "
+            f"(e.g. {OWNED_PREFIX}test). A generic name like {name!r} is shared "
+            f"with other checkouts on this machine: during the P1 milestone a "
+            f"concurrent agent in a sibling checkout recreated it from a different "
+            f"migration chain and 163 tests failed spuriously. Set "
+            f"TEST_DATABASE_URL to a '{OWNED_PREFIX}*' database, or set "
+            f"CAPREP_ALLOW_SHARED_TEST_DB=1 if you have confirmed this database is "
+            f"exclusively yours. See docs/ENVIRONMENT_ISOLATION.md."
+        )
+    if not name.startswith(OWNED_PREFIX):
+        raise UnsafeDatabaseError(
+            f"Refusing to TRUNCATE {name!r}: this repository only truncates "
+            f"databases named '{OWNED_PREFIX}<purpose>'. Got {name!r} from the "
+            f"configured test URL. See docs/ENVIRONMENT_ISOLATION.md."
+        )
+    return name
 
 
 def run[T](coro: Coroutine[Any, Any, T]) -> T:
@@ -78,6 +152,12 @@ async def _truncate_all(session: AsyncSession) -> None:
     await session.commit()
 
 
+async def _current_database(session: AsyncSession) -> str:
+    """The connected database's name, read from the server rather than parsed."""
+    row = await session.execute(text("SELECT current_database()"))
+    return str(row.scalar_one())
+
+
 @asynccontextmanager
 async def open_database(url: str) -> AsyncIterator[AsyncSession]:
     """A session on a database emptied of every row except the migration history."""
@@ -85,6 +165,12 @@ async def open_database(url: str) -> AsyncIterator[AsyncSession]:
     try:
         factory = async_sessionmaker(engine, expire_on_commit=False)
         async with factory() as session:
+            # Checked against the SERVER's idea of the current database, not just
+            # the URL we were handed: a URL can resolve to a different database
+            # through a search_path, a proxy or a rewritten DSN, and the only
+            # authority on what is about to be emptied is the server itself.
+            live = await _current_database(session)
+            assert_disposable_database(f"postgresql:///{live}")
             await _truncate_all(session)
             try:
                 yield session

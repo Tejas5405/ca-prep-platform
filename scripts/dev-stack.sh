@@ -28,7 +28,7 @@
 #   scripts/dev-stack.sh prepare     # python deps + postgres binaries + initdb
 #   scripts/dev-stack.sh up          # exec postgres in the foreground (port 5433)
 #   scripts/dev-stack.sh db-create   # create both databases, migrate, seed
-#   scripts/dev-stack.sh test        # the full suite against caprep_test
+#   scripts/dev-stack.sh test        # the full suite against caprep_v2_test
 #   scripts/dev-stack.sh api         # exec uvicorn on port 8000
 #   scripts/dev-stack.sh web         # exec vite on port 5173
 #
@@ -157,7 +157,9 @@ PY
 db_create() {
   db_running || { echo "postgres is not listening on $PG_PORT - start it first" >&2; exit 1; }
   log "databases, migrations, seed"
-  for name in caprep caprep_test; do
+  # Names carry this checkout's prefix (caprep_v2_*) so a sibling checkout on the
+  # same machine can never share them - see docs/ENVIRONMENT_ISOLATION.md.
+  for name in caprep caprep_v2_test; do
     # CREATE DATABASE cannot run inside a transaction, hence autocommit in sql().
     if sql postgres "SELECT 1 FROM pg_database WHERE datname = '$name'" | grep -q 1; then
       ok "$name exists"
@@ -166,8 +168,8 @@ db_create() {
     fi
   done
 
-  log "alembic upgrade head (caprep and caprep_test)"
-  for name in caprep caprep_test; do
+  log "alembic upgrade head (caprep and caprep_v2_test)"
+  for name in caprep caprep_v2_test; do
     ( cd "$API" && DATABASE_URL="postgresql://postgres@127.0.0.1:$PG_PORT/$name" alembic upgrade head >/dev/null )
     ok "$name at head"
   done
@@ -181,7 +183,7 @@ test_suite() {
   db_running || { echo "postgres is not listening on $PG_PORT - start it first" >&2; exit 1; }
   log "ruff + pytest (with database)"
   ( cd "$API" && python3 -m ruff check . && python3 -m ruff format --check . )
-  ( cd "$API" && TEST_DATABASE_URL="postgresql://postgres@127.0.0.1:$PG_PORT/caprep_test" python3 -m pytest -q )
+  ( cd "$API" && TEST_DATABASE_URL="postgresql://postgres@127.0.0.1:$PG_PORT/caprep_v2_test" python3 -m pytest -q )
 }
 
 # ------------------------------------------------------------------ servers

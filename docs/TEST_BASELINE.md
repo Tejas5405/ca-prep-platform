@@ -132,7 +132,7 @@ npm test            # 248 tests total
 ```bash
 # backend
 cd apps/api
-TEST_DATABASE_URL=postgresql://caprep@127.0.0.1:5432/caprep_test python -m pytest -o addopts="" -q
+TEST_DATABASE_URL=postgresql://caprep@127.0.0.1:5432/caprep_v2_test python -m pytest -o addopts="" -q
 ruff check app tests alembic && ruff format --check app tests alembic
 alembic upgrade head && alembic check
 

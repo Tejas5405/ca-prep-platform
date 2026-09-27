@@ -11,10 +11,15 @@ These tests run only when ``TEST_DATABASE_URL`` is set, pointing at a DISPOSABLE
 database. There is deliberately no fallback to ``DATABASE_URL``: a fallback means
 one careless environment variable away from a test truncating a real database.
 
-    createdb caprep_test
-    TEST_DATABASE_URL=postgresql://postgres@localhost:5432/caprep_test \\
-      DATABASE_URL=postgresql+psycopg://postgres@localhost:5432/caprep_test \\
+    createdb caprep_v2_test
+    TEST_DATABASE_URL=postgresql://postgres@localhost:5432/caprep_v2_test \\
+      DATABASE_URL=postgresql+psycopg://postgres@localhost:5432/caprep_v2_test \\
       pytest tests/test_integration_db.py
+
+The name matters as much as the variable. The integration harness refuses to
+truncate anything outside this repository's ``caprep_v2_*`` namespace, because a
+generic name is shared with other checkouts on this machine - see
+``docs/ENVIRONMENT_ISOLATION.md``.
 
 The schema must already be migrated (``alembic upgrade head``); the round-trip test
 is the one exception and only runs against a database whose name ends in ``_test``.
