@@ -265,3 +265,147 @@ not transfer.
 
 **Classification: `CI_CONFIGURATION`.** The workflow supplies build-time config to
 the build step but not to the test step.
+
+---
+
+# Resolution — commit `2b25ed5` (`fix: make the test suite self-contained for clean CI`)
+
+Both root causes are as diagnosed above. One of them — Issue B — was a genuine
+weakness in the test, and the frontend issue was a genuine reproducibility
+defect. Both are fixed at the source rather than in the workflow.
+
+## Why the workflow-only fix was rejected
+
+Adding the same `env:` block to the `Test` step would have turned CI green. It
+was rejected because it makes the wrong thing true:
+
+```
+Clean clone + test.env in the workflow  -> tests pass
+Clean clone + no workflow edit           -> tests still fail
+```
+
+Green would have depended on a value being threaded through a YAML file rather
+than on the repository being self-contained, and the local suite would have
+stayed broken for anyone without `.env.local`. It also would not have fixed
+Issue B at all, so it would have been a *partial* fix wearing the appearance of
+a complete one — the exact failure mode this milestone exists to prevent.
+
+## Issue A — frontend test environment
+
+**Root cause:** `lib/supabase.ts` throws at module load without `VITE_SUPABASE_*`
+(by design), and the values came from gitignored `apps/web/.env.local`.
+
+**Fix:** the test runner now supplies them, in `vitest.config.ts`:
+
+```ts
+test: {
+  env: {
+    VITE_SUPABASE_URL: 'https://test-project.supabase.co',
+    VITE_SUPABASE_ANON_KEY: 'sb_publishable_vitest_fake_key',
+  },
+}
+```
+
+Chosen deliberately:
+
+- **Fakes, never real.** The ref `test-project` cannot collide with the real
+  project, and the key is publishable, not a secret. No credential is committed.
+- **Syntactically real**, so `new URL(url).hostname` in `lib/supabase.ts` runs the
+  production code path rather than a stub.
+- **Test configuration, not runtime.** `lib/supabase.ts` is untouched and its
+  loud module-load guard is preserved — that guard is correct and is what makes
+  this class of misconfiguration visible instead of silent.
+- `supabaseClient.test.ts` still calls `vi.stubEnv` and takes precedence for that
+  file, so the test that asserts on the values directly is unaffected.
+
+## Issue B — the infrastructure contract test
+
+**Root cause:** `assert len(found) >= 2` tested an environmental quantity
+(how many files happened to exist) instead of the invariant (do the values
+agree). It failed on a non-contradictory clean checkout, passed locally only
+because of the untracked file, and — worst — would have **passed on two sources
+that disagree**.
+
+**Fix:** the rule is now stated in terms of the invariant, extracted to a
+module-level `assert_project_urls_consistent` so it can be tested against
+synthetic configurations:
+
+| Discovered sources | Behaviour | Rationale |
+|---|---|---|
+| 0 | **fail** — "no configuration source names a Supabase project" | missing configuration must be loud |
+
+## Clean-checkout verification (mandatory)
+
+A fresh clone of the pushed commit, patched with the fix, with **no
+`.env.local` and no ignored files**:
+
+| Step | Result |
+|---|---|
+| `npm ci` (from lockfile) | ✅ exit 0 |
+| `npm test` | ✅ **248 / 248**, 19 files |
+| `python3 -m pytest` | ✅ **798 passed**, 251 skipped |
+| `check_secrets.py --worktree` | ✅ **CLEAN** |
+| tracked `.env` files | only `.env.example` + `apps/web/.env.example` |
+
+The 5-test difference from the developer checkout (803 vs 798) is **not** a
+regression. Those five are untracked-file-dependent infra tests that skip
+themselves by design when the file is absent:
+
+```
+SKIPPED tests/test_infra_contract.py:451: no Supabase database URL in this checkout
+SKIPPED tests/test_infra_contract.py:496: no legacy anon JWT in this checkout
+SKIPPED tests/test_infra_contract.py:642: no local web env in this checkout
+SKIPPED tests/test_infra_contract.py:737: no local .env with a Supabase secret
+SKIPPED tests/test_infra_contract.py:773: no local .env with a Supabase secret
+```
+
+Nothing fails in either environment. No further hidden local dependency was
+found, so no additional workaround was needed.
+
+## Regression results (developer checkout)
+
+| Gate | Result |
+|---|---|
+| `npm test` (run 1) | ✅ 248 / 248 |
+| `npm test` (run 2) | ✅ 248 / 248 — deterministic |
+| `npm run typecheck` | ✅ exit 0 |
+| `npm run lint` | ✅ exit 0 |
+| `npm run build` | ✅ built in 458 ms |
+| `ruff check .` | ✅ All checks passed |
+| `ruff format --check .` | ✅ 153 files formatted |
+| `alembic check` | ✅ No new upgrade operations detected |
+| `pytest` Redis **ON** (`127.0.0.1:6379`) | ✅ **803 passed**, 246 skipped |
+| `pytest` Redis **OFF** (unreachable `127.0.0.1:6399`) | ✅ **803 passed**, 246 skipped |
+| `check_secrets.py --worktree` / `--staged` / `--rev HEAD` | ✅ **CLEAN** ×3 |
+
+No regression in any existing gate. Redis ON/OFF remains deterministic, as the
+`conftest.py` isolation work intended.
+
+**Scope check:** 2 files changed — `apps/web/vitest.config.ts` and
+`apps/api/tests/test_infra_contract.py`. No application code, no workflow, no
+schema, no API contract, no production configuration, no test skipped, no
+`verify=False`, no weakened assertion. Pre-existing helpers in the Python file
+were verified byte-identical to `HEAD` by AST extraction.
+
+## New CI run
+
+| Field | Value |
+|---|---|
+| Commit | `2b25ed5` |
+| Triggered by | `fix: make the test suite self-contained for clean CI` |
+| Run ID | *filled in below once the run completes* |
+
+| 1 | **pass** | nothing to disagree with; the clean-clone case |
+| ≥2, all agreeing | **pass** | the invariant holds |
+| ≥2, any conflict | **fail** — "Supabase project URLs disagree" | the mistake the test exists to catch |
+
+**Ten new tests** cover: zero sources, one source, two matching, trailing-slash
+agreement, two conflicting, three sources with one conflict, placeholder
+recognition, a real host not being treated as a placeholder, placeholder-only
+configuration yielding no sources, and a guard that discovery still finds the
+committed `render.yaml` value.
+
+The old assertion could not have tested any of this: from a normal checkout it
+executes exactly one path. Security intent is preserved — conflicting values
+still fail, and a checkout naming no project now fails **for the correct
+reason** rather than by accident.
