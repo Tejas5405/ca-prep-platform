@@ -347,6 +347,51 @@ Also confirmed for Phase 6: `NEXT_PUBLIC_*` appears **nowhere** in the repositor
 (0 occurrences), the frontend uses `VITE_` only, and no secret carries a `VITE_`
 prefix.
 
+## B.8 P2A-4 — identity, migrations, seed: BLOCKED at Phase 1
+
+This milestone was supposed to load `.env.staging`, prove database identity, and
+apply migrations to staging. **`.env.staging` does not exist on this machine.**
+
+Verified across every plausible location — repo root, `apps/web`, `apps/api`,
+`~/Downloads`, `$HOME`, `/tmp`, the shell environment, and a depth-4 `find`. All
+absent. The only matches are the **unfilled `.example` templates** from P2A, still
+containing `<STAGING_PROJECT_REF>` placeholders. The only Supabase ref anywhere on
+this machine is the development one.
+
+```
+STAGING_SUPABASE_CREATED    = YES
+STAGING_AUTH_REACHABLE      = YES
+STAGING_SUPABASE_ISOLATED   = BLOCKED_EXTERNAL
+STAGING_DATABASE_IDENTIFIED = BLOCKED_EXTERNAL
+STAGING_MIGRATIONS_APPLIED  = BLOCKED_EXTERNAL
+STAGING_STORAGE_VERIFIED    = BLOCKED_EXTERNAL
+STAGING_SEED_VERIFIED       = BLOCKED_EXTERNAL
+```
+
+Consequently **`alembic upgrade head` was not run against anything**, no bucket
+was created or probed, no seed was executed, and no backend was started. The
+development database was not connected to even read-only: it is `caprep` on
+`localhost`, named in the task as a database that must not be touched, and reading
+its name would prove nothing about staging.
+
+Two things were still verified usefully:
+
+- **The seed's `--check` mode is genuinely read-only.** `main()` returns at
+  `if check:` before any `seed_all()` call, confirmed by reading the code rather
+  than trusting the docstring. The outstanding item is the two-run idempotency
+  check, which genuinely needs a live staging database.
+- **`.env.staging` is already gitignored** (`.gitignore:19`) and all four tracked
+  `.env*` files are `.example` templates. A filled staging config could not be
+  committed even by accident.
+
+Full evidence, including the exact search performed and the unblock procedure, in
+**`docs/STAGING_SUPABASE_VALIDATION.md`**.
+
+Regression: ruff check and format clean, alembic check clean, **821 backend with
+Redis both ON and OFF**, 248/248 web, typecheck, lint, build pass, secrets CLEAN
+×3. No test modified, skipped or weakened.
+
+
 
 
 ## B.5 Next milestone
