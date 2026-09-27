@@ -121,30 +121,57 @@ app.add_middleware(
 
 @app.middleware("http")
 async def request_context_middleware(request: Request, call_next):
-    """Attach a request id and emit one structured access log line per request."""
+    """Attach a request id and emit one structured access log line per request.
+
+    THE ID MUST SURVIVE BOTH THE SUCCESS AND THE FAILURE PATH. Two defects lived
+    here:
+
+      * the contextvar was reset BEFORE the access line was written, so every
+        access log entry recorded ``request_id: "-"`` - the response header was
+        the only place the id appeared;
+      * an unhandled exception escaped this middleware entirely (the catch-all
+        handler runs in Starlette's ServerErrorMiddleware, OUTSIDE user
+        middleware), so a 500 had no access line at all and no id could be
+        attached here.
+
+    So the access line is emitted while the contextvar is still bound, and the
+    exception branch logs the 500 access line before re-raising. The id itself is
+    added to the 500 response by the catch-all handler, which reads
+    ``request.state.request_id`` set below.
+    """
     import uuid
 
     rid = request.headers.get("x-request-id") or uuid.uuid4().hex[:16]
     token = request_id_ctx.set(rid)
     request.state.request_id = rid
 
+    logger = logging.getLogger("app.access")
     started = time.perf_counter()
     try:
         response = await call_next(request)
+    except Exception:
+        # Re-raised, never swallowed: the catch-all handler builds the response.
+        logger.error(
+            "%s %s -> 500 in %sms",
+            request.method,
+            request.url.path,
+            round((time.perf_counter() - started) * 1000, 1),
+        )
+        raise
+    else:
+        duration_ms = round((time.perf_counter() - started) * 1000, 1)
+        response.headers["X-Request-Id"] = rid
+
+        logger.info(
+            "%s %s -> %s in %sms",
+            request.method,
+            request.url.path,
+            response.status_code,
+            duration_ms,
+        )
+        return response
     finally:
         request_id_ctx.reset(token)
-
-    duration_ms = round((time.perf_counter() - started) * 1000, 1)
-    response.headers["X-Request-Id"] = rid
-
-    logging.getLogger("app.access").info(
-        "%s %s -> %s in %sms",
-        request.method,
-        request.url.path,
-        response.status_code,
-        duration_ms,
-    )
-    return response
 
 
 @app.exception_handler(PermissionDenied)
@@ -233,15 +260,38 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Catch-all handler: the response must carry the SAME id the logs cite.
+
+    Starlette runs this handler in ServerErrorMiddleware, OUTSIDE the user
+    middleware that normally stamps ``X-Request-Id``. Without the id below, the
+    body promised "the request id is in the response headers" while the response
+    had no such header and the log line recorded ``request_id: "-"`` - so the one
+    case where correlation matters most (a 500) was exactly the case where it was
+    impossible.
+
+    The id is restored into the contextvar only for the duration of the log call,
+    so the structured formatter records the same value that goes on the wire.
+    """
     import logging as _logging
 
-    _logging.getLogger("app.error").exception("Unhandled error: %s", exc)
-    return problem(
+    rid = getattr(request.state, "request_id", None)
+    error_logger = _logging.getLogger("app.error")
+    token = request_id_ctx.set(rid) if rid else None
+    try:
+        error_logger.exception("Unhandled error: %s", exc, extra={"request_id": rid or "-"})
+    finally:
+        if token is not None:
+            request_id_ctx.reset(token)
+
+    response = problem(
         status=500,
         title="Internal Server Error",
         detail="An unexpected error occurred. The request id is in the response headers.",
         type_slug="internal",
     )
+    if rid:
+        response.headers["X-Request-Id"] = rid
+    return response
 
 
 # Health is mounted at the root, NOT under /api/v1, so infrastructure probes do
