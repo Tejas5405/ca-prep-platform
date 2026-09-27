@@ -2818,6 +2818,17 @@
             ],
             "title": "Ai Provider Api Key"
           },
+          "ai_provider_fallback_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ai Provider Fallback Model"
+          },
           "ai_provider_model": {
             "default": "gemini-3.8-flash",
             "title": "Ai Provider Model",

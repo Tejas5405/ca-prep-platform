@@ -10,7 +10,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Annotated, Literal
 
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -155,6 +155,15 @@ class Settings(BaseSettings):
     # Hard ceilings are required; there is deliberately no "unlimited" mode.
     ai_provider_api_key: str | None = None
     ai_provider_model: str = "gemini-3.8-flash"
+    #: A DIFFERENT model to retry with when the primary call fails.
+    #:
+    #: Why this is configuration and not a constant: the previous code carried a
+    #: hardcoded "fallback" that equalled the default model, so the retry branch
+    #: could never run - a failing primary was retried against the same model
+    #: (i.e. the same outage) or not at all, and nothing said so. The validator
+    #: below refuses an identical pair; unset means "no fallback", which the
+    #: caller must treat as a single attempt, never as an invented answer.
+    ai_provider_fallback_model: str | None = None
     ai_monthly_ceiling_usd: float = 200.0
     ai_free_queries_per_day: int = 5
 
@@ -214,6 +223,25 @@ class Settings(BaseSettings):
     def split_admin_emails(cls, v: object) -> object:
         """As above, lower-cased because the comparison is case-insensitive."""
         return [item.lower() for item in _split_list(v)]
+
+    @model_validator(mode="after")
+    def _ai_fallback_must_differ(self) -> Settings:
+        """An identical fallback is a retry of the same failure, not redundancy.
+
+        Configured explicitly rather than silently ignored: an operator who sets
+        both names to the same model believes they have provider redundancy. They
+        do not, and the honest moment to say so is at startup, not during the
+        outage the fallback was supposed to cover.
+        """
+        if (
+            self.ai_provider_fallback_model
+            and self.ai_provider_fallback_model == self.ai_provider_model
+        ):
+            raise ValueError(
+                "AI_PROVIDER_FALLBACK_MODEL must differ from AI_PROVIDER_MODEL: "
+                "a fallback on the same model retries the same outage."
+            )
+        return self
 
     @property
     def is_production(self) -> bool:

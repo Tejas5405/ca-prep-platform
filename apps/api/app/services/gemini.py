@@ -15,7 +15,6 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-_FALLBACK_MODEL = "gemini-3.8-flash"
 _INSTRUCTION = (
     "You are a study assistant for CA students in India. You are not a legal "
     "authority, not ICAI, and not a substitute for the statute. Use only the "
@@ -43,8 +42,15 @@ async def write_suggestion(
     model: str,
     query: str,
     excerpts: list[str],
+    fallback_model: str | None = None,
 ) -> str | None:
-    """Call Gemini. None means no suggestion, not a fallback explanation."""
+    """Call the provider. None means no suggestion, not a fallback explanation.
+
+    ``fallback_model`` is CONFIGURATION (``AI_PROVIDER_FALLBACK_MODEL``), not a
+    constant. It is tried only when it is set AND different from the primary
+    model, so the retry can never re-run the same request against the same
+    outage, and an unset value means exactly one attempt.
+    """
     prompt = build_prompt(query, excerpts)
     if prompt is None or not api_key:
         return None
@@ -52,8 +58,8 @@ async def write_suggestion(
         prompt = prompt.replace(api_key, "[redacted]")
 
     text = await _call(api_key, model, prompt)
-    if text is None and model != _FALLBACK_MODEL:
-        text = await _call(api_key, _FALLBACK_MODEL, prompt)
+    if text is None and fallback_model and fallback_model != model:
+        text = await _call(api_key, fallback_model, prompt)
     if not text:
         return None
     cleaned = text.strip()

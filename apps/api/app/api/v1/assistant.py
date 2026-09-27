@@ -199,6 +199,7 @@ async def ask(
             model=settings.ai_provider_model,
             query=payload.query.strip(),
             excerpts=excerpts,
+            fallback_model=settings.ai_provider_fallback_model,
         )
         if answer:
             generates = True
