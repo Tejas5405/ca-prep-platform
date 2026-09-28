@@ -2,6 +2,8 @@
 
 **Milestone:** P2A-5 — explicit, fail-closed environment selection
 **Baseline commit:** `78dccd8`
+**Verified on:** `4b21742` — all 5 CI checks green (API, Web, Migrations are
+reversible, Security Scanner, SonarCloud)
 **The rule this document exists to state:**
 
 > **Staging and production never fall back to the development `.env`.**
@@ -150,12 +152,31 @@ Two implementation details that were got wrong first and are now pinned:
   `Literal` — **better** than the quiet fallback originally planned, and asserted
   so it cannot silently regress into something laxer.
 
-## 8. What remains true
+## 8. Verified behaviour, and how to re-prove it
+
+The four cases below were exercised through the **real** `Settings` import in a
+scratch directory containing a plausible development `.env` (localhost database).
+This is the end-to-end proof, not just the unit tests:
+
+| `ENVIRONMENT` | `.env.staging` present | Result |
+|---|---|---|
+| `staging` | no | **refuses** — `ConfigurationError` names `.env.staging` |
+| `production` | no | **refuses** — `ConfigurationError` names `.env.production` |
+| `development` | no | starts, reads `.env`, localhost DB — unchanged |
+| `staging` | yes | starts, uses the **staging** DB; no development value leaks |
+
+A real environment variable still overrides the file, which is what lets a
+Render/Vercel-style dashboard supply values with no file on disk at all.
+
+## 9. What remains true
 
 - No secret is committed. `check_secrets.py` CLEAN on worktree, staged and `HEAD`.
-- `.env.staging` and `.env` are gitignored; only `.example` templates are tracked.
+- `.env.staging` and `.env` are gitignored (`.gitignore:19`); only `.example`
+  templates are tracked.
 - The staging templates remain shell-loadable, and their placeholders remain
   recognisable as placeholders to the scanner.
+- `.env.staging` still does not exist. Creating it is the owner's next step, and
+  is now **safe** to do: the application can no longer ignore it.
 
 ## 3. Failure mode
 
