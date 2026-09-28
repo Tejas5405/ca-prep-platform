@@ -3,7 +3,7 @@
 **Milestone:** P2A — prepare for an isolated staging environment
 **Prior milestone:** P2 (blocked at Phase 0) — recorded in §A below
 **Baseline commit:** `51df3e0` → P2A
-**Latest:** `bd02ba5` — P2A-6, see **§B.11**
+**Latest:** P2A-7 — see **§B.12**. Single active blocker: **§B.11**
 **Status:**
 
 ```
@@ -313,6 +313,82 @@ credential, and contained none of the five values the isolation proof requires.
 No database was connected, no migration was run, and no development resource was
 touched. All gates re-verified green: 821 backend, 248 web, secrets CLEAN ×3.
 
+## B.12 P2A-7 — a read-only gate in front of the first irreversible action
+
+**The blocker is unchanged — `.env.staging` still does not exist — so this
+milestone built the thing that makes the next one safe rather than repeating the
+blocked attempt.**
+
+`alembic upgrade head` is the first action in this repository that cannot be
+undone by deleting a file. Everything before it is cheap: read a ref, open a
+connection, ask the server its own name. Nothing enforced that ordering; it lived
+in a checklist, which is exactly the mechanism that fails at 2am.
+
+**`scripts/staging_preflight.py`** now enforces it. Read-only by construction: one
+`SELECT current_database()`, then close. It never runs DDL, never runs Alembic,
+never writes. It gates three things, in order, and **a later gate is not evaluated
+while an earlier one fails** — it does not merely report the failure:
+
+| Gate | Asserts |
+|---|---|
+| 1 | the ref in `SUPABASE_URL` is not the development ref |
+| 2 | `DIRECT_DATABASE_URL` carries *that* ref, so the URL is identifiable |
+| 3 | `current_database()` is not a name on the do-not-touch list |
+
+Exit `0` = identity proven, migrations now safe **to run by hand**. It does not
+run them. Exit `1` = not proven. Exit `2` = no configuration to verify.
+
+**The load-bearing property is that gate 3 is never reached while 1 or 2 fails**,
+because opening a connection is the first thing that touches a real server. If a
+staging project is perfectly isolated but its URL points at the development
+database, only gate 3 catches it — and a script that connected early would be the
+thing that made the mistake.
+
+### Two real defects this work found
+
+**1. A pydantic error message echoes the offending input value.** A `ValidationError`
+printed verbatim includes `input_value='...'`, so a mistyped *secret* field would be
+published to stdout by the very tool meant to protect it. The preflight reports only
+field names and expected types. Not hypothetical: an ambient `DEBUG=release` in the
+shell — a Django-ism with no meaning here — triggered it, because a real environment
+variable outranks the file.
+
+**2. `supabase_ref()` mis-parsed pooler hosts.** `db.<ref>.supabase.co` yielded the
+ref `db.<ref>`, which would then be compared against the forbidden ref and fail for
+the wrong reason — or be printed as if it were the project identity. A Supabase ref
+is a single 20-character label; only that exact shape is accepted now. **Caught by a
+test written after the code, which is the only reason it was caught at all.**
+
+### 26 tests, mutation-verified
+
+`apps/api/tests/test_staging_preflight.py`. The three gate tests monkeypatch
+`read_current_database` to **fail the test if it is called**, so "refuses before
+connecting" is enforced rather than asserted in prose. Mutation check: changing
+`if all(v.ok ...)` to `if True` — connecting before identity is proven — fails 2
+tests with `Failed: opened a connection!`.
+
+Worth recording as a process note: the first full-suite run after adding these tests
+showed **24 failures in `test_storage.py`**. The cause was the *test*, not the
+script — `main()` sets `ENVIRONMENT=staging` in the real process environment, which
+is right for a CLI and wrong for a test, and it leaked into every later test in the
+session. The `run_main` helper now restores it. A preflight tool that breaks the
+suite it is meant to protect would have been worse than none.
+
+### Gates — all green
+
+| Gate | Result |
+|---|---|
+| `pytest` Redis **ON** / **OFF** | ✅ **885 passed**, 246 skipped (was 859) |
+| `ruff check` / `format --check` | ✅ All checks passed / 156 formatted |
+| `alembic check` | ✅ No new upgrade operations |
+| `npm test` | ✅ 248/248 |
+| `typecheck` / `lint` / `build` | ✅ OK / OK / OK |
+| `check_secrets` worktree | ✅ CLEAN |
+
+No existing test modified, skipped or weakened — the 24 `test_storage.py` failures
+were caused by a leak in the *new* test and were fixed there, not by touching the
+existing tests.
+
 ## B.11 P2A-6 — Supabase staging initialization: BLOCKED at Phase 1
 
 **This milestone was requested on the basis that the owner had created
@@ -407,6 +483,16 @@ Fill it with the **staging** project `vfewnfwyagcxtaxbmwqb` only — never
 `DATABASE_URL` (pooler), `DIRECT_DATABASE_URL` (migrations). Do not send any
 value to the agent. `.env.staging` is already gitignored, so it cannot be
 committed by accident.
+
+**Then run the gate, not the migration** (added in §B.12):
+
+```bash
+python scripts/staging_preflight.py --forbid-ref zyrmlnpvylhcpyaoizyz
+```
+
+It is read-only. Exit `0` means identity is proven and `alembic upgrade head` is
+safe to run by hand. Exit `1` means it is not proven — read the FAIL line, fix it,
+run it again. It never prints a secret, a password, or a connection string.
 
 **Still outstanding, unchanged and security-relevant:** rotate the exposed
 `sb_secret_` and `GOCSPX-` Google secrets. They are not in the repository and the
