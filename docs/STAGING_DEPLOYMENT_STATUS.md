@@ -313,6 +313,67 @@ credential, and contained none of the five values the isolation proof requires.
 No database was connected, no migration was run, and no development resource was
 touched. All gates re-verified green: 821 backend, 248 web, secrets CLEAN ×3.
 
+## B.13 P2A-8 — `.env.staging` created, two secrets left
+
+**The file now exists.** It is gitignored, untracked, and contains no real
+credential. Everything that is *public* has been filled in, so the operator is
+left with **two pastes** rather than twenty fields:
+
+```text
+ENVIRONMENT=staging
+SUPABASE_URL=https://vfewnfwyagcxtaxbmwqb.supabase.co
+STORAGE_BUCKET=question-pdfs
+```
+
+The staging ref is public by design — it is the hostname — and
+`db.vfewnfwyagcxtaxbmwqb.supabase.co` was confirmed to resolve in DNS, so
+`DIRECT_DATABASE_URL` is complete apart from the password. The pooler URL is the
+one line that genuinely needs the owner, because the region cannot be discovered:
+Supabase wildcard its pooler hostnames, so every region resolves and DNS cannot
+distinguish them. Guessing a region would have been worse than leaving it blank.
+
+### What is left: two secrets
+
+| # | Value | Where |
+|---|---|---|
+| 1 | `SUPABASE_SECRET_KEY` | the **rotated** key, not the exposed `sb_secret_` |
+| 2 | the database **password** | one paste; both URLs are otherwise correct |
+
+### The preflight now names every blank at once
+
+It previously stopped at the first problem, which in practice reported
+`debug (expected bool_parsing)` — an ambient `DEBUG=release` in the agent's
+environment — and told the operator nothing about the secrets still empty. A
+verification tool that makes you iterate one blank per run is a worse tool.
+
+```
+  [FAIL] 2 required value(s) are still blank or a placeholder:
+           - SUPABASE_SECRET_KEY
+           - DIRECT_DATABASE_URL
+  Fill them in .env.staging. Do not paste them into the chat.
+```
+
+Names only, never values; a test asserts no value can appear in that report. A
+value that is *present but still a placeholder* (`YOUR_PASSWORD_HERE`) counts as
+missing, because that is how a template reaches a live service.
+
+### A wrong assumption, caught by a test
+
+`SUPABASE_ANON_KEY` was initially listed as required. **`Settings` has no such
+field** — it is a frontend build-time Vite variable, and the backend never reads
+it. Requiring it would have reported a permanently unfilled requirement and
+blocked a verification it had no bearing on. The template's variable list is not
+the same as the application's field list, which is a distinction worth stating
+rather than assuming.
+
+A companion test now asserts every `REQUIRED_KEYS` entry is a real `Settings`
+field, because a typo there would be invisible: `getattr` returns `None`, and the
+key is reported missing forever.
+
+31 preflight tests. 890 backend with Redis both reachable and unreachable (was
+885), 248 web, ruff, format, alembic check, typecheck, lint, build, secrets CLEAN
+×3. `.env.staging` contains no real secret and cannot be committed.
+
 ## B.12 P2A-7 — a read-only gate in front of the first irreversible action
 
 **The blocker is unchanged — `.env.staging` still does not exist — so this

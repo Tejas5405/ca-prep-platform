@@ -218,6 +218,43 @@ def read_current_database(url: str) -> str | None:
         return None
 
 
+#: The keys that must be non-empty before any staging verification can mean
+#: anything. Checked UP FRONT and all at once, because a pydantic error stops at
+#: the first bad field: an operator left staring at "debug (expected bool_parsing)"
+#: has been told nothing about the secrets that are still blank.
+#:
+#: `SUPABASE_ANON_KEY` is deliberately NOT here. It is a `VITE_`-era frontend
+#: variable read at BUILD time by Vite; `Settings` has no such field, and the
+#: backend never uses it. Listing it would report a permanently unfilled
+#: requirement and block a verification that has nothing to do with it.
+REQUIRED_KEYS = (
+    "SUPABASE_URL",
+    "SUPABASE_SECRET_KEY",
+    "DATABASE_URL",
+    "DIRECT_DATABASE_URL",
+)
+
+#: Placeholder markers a copied template may still contain. A value that is
+#: present but still says `YOUR_` is not filled in, and treating it as filled is
+#: how a placeholder reaches a live service.
+PLACEHOLDER_MARKERS = ("YOUR_", "your-", "<", "CHANGEME", "REPLACE_ME")
+
+
+def missing_required(settings: Settings) -> list[str]:
+    """Required keys that are empty or still hold a template placeholder.
+
+    Names only, never values - the whole point of this function is to be safe to
+    print.
+    """
+    missing: list[str] = []
+    for key in REQUIRED_KEYS:
+        value = getattr(settings, key.lower(), None)
+        text = "" if value is None else str(value)
+        if not text.strip() or any(marker in text for marker in PLACEHOLDER_MARKERS):
+            missing.append(key)
+    return missing
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Read-only proof that a staging target is staging. Runs no migrations.",
@@ -273,10 +310,30 @@ def main() -> int:
         print(f"  [FAIL] staging configuration is invalid: {fields}")
         print("  (values are not shown: a pydantic error echoes the input, and the")
         print("   input may be the secret you were trying to protect)")
+        if any("supabase" in loc for err in exc.errors() for loc in map(str, err["loc"])):
+            print(
+                "\n  If a secret value was mistyped, remember a real environment\n"
+                "  variable OUTRANKS this file. Check your shell:"
+            )
+            for key in ("SUPABASE_SECRET_KEY", "SUPABASE_ANON_KEY", "DATABASE_URL"):
+                if os.getenv(key) is not None:
+                    print(f"    {key} is set in the environment and will win")
         print("\nRESULT: BLOCKED_EXTERNAL - staging configuration does not validate.")
         return 2
 
     staging_ref = supabase_ref(settings.supabase_url)
+
+    # Report EVERY unfilled key at once, before any gate runs. A verification tool
+    # that stops at the first problem makes the operator iterate one blank at a
+    # time, and a blank secret and a blank pooler region look identical in an
+    # error message. Names only; the values are never printed.
+    unfilled = missing_required(settings)
+    if unfilled:
+        print(f"  [FAIL] {len(unfilled)} required value(s) are still blank or a placeholder:")
+        for key in unfilled:
+            print(f"           - {key}")
+        print("  Fill them in .env.staging. Do not paste them into the chat.\n")
+
     verdicts = [
         check_project_isolated(staging_ref, forbidden_refs),
         check_url_points_at_project(settings.direct_database_url, staging_ref),

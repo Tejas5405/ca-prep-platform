@@ -194,6 +194,92 @@ class TestTheGateRefusesBeforeConnecting:
         assert "release" not in out, "the offending value was echoed to stdout"
         assert "debug" in out, "the failing field should still be named"
 
+
+class TestUnfilledValuesAreNamed:
+    """An operator must be told every blank at once, by NAME only.
+
+    The alternative - failing on the first problem - makes them iterate one blank
+    per run, and a blank secret and a blank pooler region are indistinguishable in
+    an error message.
+    """
+
+    def test_a_blank_secret_is_reported_by_name(self) -> None:
+        from app.core.config import Settings
+
+        settings = Settings(_env_file=None, supabase_url=f"https://{STAGING_REF}.supabase.co")
+        missing = pf.missing_required(settings)
+        assert "SUPABASE_SECRET_KEY" in missing
+        # Names only. The function exists to be printed, so it must never be the
+        # thing that leaks.
+        assert all("=" not in name for name in missing)
+
+    def test_the_frontend_only_anon_key_is_not_required(self) -> None:
+        """`Settings` has no `supabase_anon_key` field, so requiring it is wrong.
+
+        It is a build-time Vite variable. Listing it as required would report a
+        value the backend never reads and block a verification it has no bearing
+        on. Asserted because the mistake is invisible until someone reads the
+        field list carefully.
+        """
+        from app.core.config import Settings
+
+        assert "SUPABASE_ANON_KEY" not in pf.REQUIRED_KEYS
+        assert not hasattr(Settings(_env_file=None), "supabase_anon_key")
+        # Every required key must be a real field, or `getattr` silently returns
+        # None and the key is reported missing forever.
+        for key in pf.REQUIRED_KEYS:
+            assert hasattr(Settings(_env_file=None), key.lower()), (
+                f"{key} is required but is not a Settings field"
+            )
+
+    def test_an_unfilled_template_placeholder_counts_as_missing(self) -> None:
+        from app.core.config import Settings
+
+        # The dangerous case: a value that is PRESENT but still says YOUR_. Treated
+        # as filled, a placeholder reaches a live service.
+        settings = Settings(
+            _env_file=None,
+            supabase_url=f"https://{STAGING_REF}.supabase.co",
+            direct_database_url=(
+                f"postgresql://postgres.{STAGING_REF}:YOUR_PASSWORD@db."
+                f"{STAGING_REF}.supabase.co:5432/postgres"
+            ),
+        )
+        assert "DIRECT_DATABASE_URL" in pf.missing_required(settings)
+
+    def test_a_fully_filled_configuration_reports_nothing_missing(self) -> None:
+        from app.core.config import Settings
+
+        settings = Settings(
+            _env_file=None,
+            supabase_url=f"https://{STAGING_REF}.supabase.co",
+            supabase_secret_key="sb_secret_fake_value_for_this_test",
+            supabase_anon_key="sb_publishable_fake_value_for_this_test",
+            database_url=(
+                f"postgresql://postgres.{STAGING_REF}:pw@aws-0-eu-west-1.pooler."
+                f"supabase.com:6543/postgres"
+            ),
+            direct_database_url=(
+                f"postgresql://postgres.{STAGING_REF}:pw@db.{STAGING_REF}.supabase.co:5432/postgres"
+            ),
+        )
+        assert pf.missing_required(settings) == []
+
+    def test_the_report_names_blanks_without_printing_values(self, tmp_path, monkeypatch, capsys):
+        (tmp_path / ".env.staging").write_text(
+            f"ENVIRONMENT=staging\nSUPABASE_URL=https://{STAGING_REF}.supabase.co\n"
+            "SUPABASE_SECRET_KEY=\n"
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("DEBUG", raising=False)
+        monkeypatch.setattr(
+            pf, "read_current_database", lambda url: pytest.fail("opened a connection!")
+        )
+        run_main("--forbid-ref", DEV_REF)
+        out = capsys.readouterr().out
+        assert "SUPABASE_SECRET_KEY" in out
+        assert "YOUR_PASSWORD" not in out, "a value leaked into the report"
+
     def test_the_development_ref_fails(self) -> None:
         verdict = pf.check_project_isolated(DEV_REF, {DEV_REF})
         assert not verdict.ok
