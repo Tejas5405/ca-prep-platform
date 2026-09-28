@@ -44,9 +44,12 @@ Prompts for four values, writes them, then tells you to run the preflight.
 from __future__ import annotations
 
 import getpass
+import os
 import pathlib
 import re
 import sys
+import tempfile
+from pathlib import Path
 from urllib.parse import urlsplit
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -177,6 +180,38 @@ def ask(prompt: str) -> str:
         raise SystemExit(130) from None
 
 
+def write_secret_file(text: str) -> None:
+    """Write the env file so that only its owner can read it.
+
+    `Path.write_text` creates a NEW file with the process umask, which on a
+    default macOS or Linux account is 0644 - world-readable. For a file holding a
+    service-role key that bypasses row-level security, that is a real exposure to
+    every other account on the machine, and it is silent: the write succeeds, the
+    script reports success, and nothing looks wrong until someone else reads it.
+
+    Written to a temporary file in the SAME directory and then renamed, because
+    `os.replace` is atomic: a crash mid-write cannot leave a half-written env
+    file that looks complete. The temporary file is created 0600 from the start,
+    so the secret is never briefly world-readable either.
+    """
+    handle, temp_name = tempfile.mkstemp(dir=str(ENV_FILE.parent), prefix=".env.staging.")
+    try:
+        with os.fdopen(handle, "w") as stream:
+            stream.write(text)
+        # mkstemp already creates 0600, but set it explicitly: the intent is the
+        # reason, and a future edit to mkstemp's mode should not silently widen
+        # this.
+        os.chmod(temp_name, 0o600)
+        os.replace(temp_name, ENV_FILE)
+    except BaseException:
+        # Never leave a temp file holding a secret behind on the failure path.
+        Path(temp_name).unlink(missing_ok=True)
+        raise
+    # os.replace preserves the temp file's mode, but an EXISTING .env.staging may
+    # have been created earlier with looser permissions, so set it again.
+    os.chmod(ENV_FILE, 0o600)
+
+
 def main() -> int:
     forbidden_ref = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_FORBIDDEN_REF
 
@@ -232,9 +267,9 @@ def main() -> int:
         ("DIRECT_DATABASE_URL", direct_url),
     ):
         text = upsert(text, key, value)
-    ENV_FILE.write_text(text)
+    write_secret_file(text)
 
-    print(f"\n  Written to {ENV_FILE.name} (gitignored: .env.staging is not tracked).")
+    print(f"\n  Written to {ENV_FILE.name} (mode 600, gitignored: not tracked).")
     print("  Every value passed validation.\n")
     print("  Now prove identity - this opens ONE read-only connection:")
     print(f"    python scripts/staging_preflight.py --forbid-ref {forbidden_ref}")

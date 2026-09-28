@@ -313,6 +313,49 @@ credential, and contained none of the five values the isolation proof requires.
 No database was connected, no migration was run, and no development resource was
 touched. All gates re-verified green: 821 backend, 248 web, secrets CLEAN ×3.
 
+## B.15 P2A-10 — a real security finding, and a correction to §B.14
+
+**I got the Sonar scale backwards, and the operator caught it.** Recording that
+plainly because the error pointed the wrong way: I read `new_security_rating = 5`
+as "A, the best" and called the gate unsatisfiable. The metric definition says
+`direction: -1` — **lower is better**, so `1` is A and `5` is **E**. The rating was
+genuinely E, the gate was correctly configured, and the red check was telling the
+truth. Had I "fixed" the gate to make the build green, I would have hidden a real
+defect in my own code. The operator's instruction not to touch the gate until this
+was proven was the correct call.
+
+**The finding:** `pythonsecurity:S2083` at `fill_staging_env.py` — flagged on the
+`write_text` of operator-supplied content.
+
+The rule's own reading is imprecise here: `ENV_FILE` is a module constant, not
+derived from input, so no path is attacker-controlled. But it pointed at something
+genuinely wrong, which is the more useful reading:
+
+> `Path.write_text` creates a NEW file with the process umask — normally **0644,
+> world-readable**.
+
+For a file holding a service-role key that bypasses row-level security, that is a
+real exposure to every other account on the machine. And it is **silent**: the
+write succeeds, the script reports success, and nothing looks wrong until someone
+else reads the file.
+
+### The fix
+
+`write_secret_file()` writes to a temp file in the same directory created **0600**,
+then `os.replace`s it into place. Atomic, so a crash cannot leave a half-written
+env file that looks complete; the secret is never briefly world-readable; the temp
+file is removed on any failure; and an **existing** file that predates the fix is
+re-tightened, because `os.replace` preserves the source mode and an older
+`.env.staging` may still be 0644.
+
+Five tests: new file is owner-only, a loose existing file is tightened, content is
+written intact, no temp file survives, and a mid-write failure leaves no secret on
+disk. Verified directly — mode is `0o600` created and after rewriting a 0644 file.
+
+27 tests in that file, 917 backend with Redis both reachable and unreachable (was
+912), 248 web, ruff, format, alembic check, secrets CLEAN ×3. The real
+`.env.staging` is now mode `600`.
+
 ## B.14 P2A-9 — filling `.env.staging` safely, and the mistakes it prevents
 
 **The blocker is unchanged: four values exist only in the owner's Supabase

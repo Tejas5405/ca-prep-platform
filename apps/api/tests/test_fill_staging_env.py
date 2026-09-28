@@ -138,6 +138,53 @@ class TestUpsert:
         assert "SUPABASE_URL=new" in fill.upsert(text, "SUPABASE_URL", "new")
         assert "old" not in fill.upsert(text, "SUPABASE_URL", "new")
 
+
+class TestTheSecretFileIsNotWorldReadable:
+    """A file holding an RLS-bypassing key must not be readable by other accounts.
+
+    Sonar flagged the plain `write_text` as a path-traversal risk. The path is
+    actually a fixed constant, so that reading is imprecise - but it pointed at
+    something genuinely wrong: `write_text` creates a new file with the process
+    umask, normally 0644. For a service-role key that is a real exposure to every
+    other account on the machine, and it is entirely silent.
+    """
+
+    @pytest.fixture
+    def scratch(self, tmp_path, monkeypatch):
+        target = tmp_path / ".env.staging"
+        monkeypatch.setattr(fill, "ENV_FILE", target)
+        return target
+
+    def test_a_new_file_is_owner_only(self, scratch) -> None:
+        fill.write_secret_file("SECRET=sb_secret_fake\n")
+        assert scratch.stat().st_mode & 0o777 == 0o600
+
+    def test_an_existing_loose_file_is_tightened(self, scratch) -> None:
+        # The file may pre-date the fix and already be 0644.
+        scratch.write_text("SECRET=old\n")
+        scratch.chmod(0o644)
+        fill.write_secret_file("SECRET=new\n")
+        assert scratch.stat().st_mode & 0o777 == 0o600
+
+    def test_the_content_is_written_intact(self, scratch) -> None:
+        fill.write_secret_file("SECRET=sb_secret_fake\nOTHER=1\n")
+        assert scratch.read_text() == "SECRET=sb_secret_fake\nOTHER=1\n"
+
+    def test_no_temporary_file_is_left_behind(self, scratch) -> None:
+        fill.write_secret_file("SECRET=sb_secret_fake\n")
+        leftovers = [p.name for p in scratch.parent.iterdir() if p.name != scratch.name]
+        assert leftovers == [], f"a temp file holding a secret survived: {leftovers}"
+
+    def test_a_failure_does_not_leave_a_secret_on_disk(self, scratch, monkeypatch) -> None:
+        def boom(*args, **kwargs):
+            raise OSError("simulated failure mid-write")
+
+        monkeypatch.setattr(fill.os, "replace", boom)
+        with pytest.raises(OSError):
+            fill.write_secret_file("SECRET=sb_secret_fake\n")
+        leftovers = [p.name for p in scratch.parent.iterdir() if p.name != scratch.name]
+        assert leftovers == [], f"a failed write leaked a temp file: {leftovers}"
+
     def test_it_appends_when_absent(self) -> None:
         assert "NEW=7" in fill.upsert("A=1\n", "NEW", "7")
 
