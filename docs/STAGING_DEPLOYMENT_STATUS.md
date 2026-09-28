@@ -3,11 +3,17 @@
 **Milestone:** P2A — prepare for an isolated staging environment
 **Prior milestone:** P2 (blocked at Phase 0) — recorded in §A below
 **Baseline commit:** `51df3e0` → P2A
+**Latest:** `bd02ba5` — P2A-6, see **§B.11**
 **Status:**
 
 ```
 STAGING_READY_FOR_DEPLOYMENT = NO   ← STAGING_BLOCKED_EXTERNAL
 ```
+
+**Single active blocker: `.env.staging` does not exist on this machine.** The
+staging Supabase project itself exists and is proven isolated; what is missing is
+the local configuration file, and therefore the database identity that the
+migrations depend on. Latest: **§B.11**.
 
 **Nothing has been deployed.** P2A completed the configuration and audit work
 that does not require infrastructure. The blockers in §A are unchanged, and no
@@ -306,6 +312,105 @@ credential, and contained none of the five values the isolation proof requires.
 
 No database was connected, no migration was run, and no development resource was
 touched. All gates re-verified green: 821 backend, 248 web, secrets CLEAN ×3.
+
+## B.11 P2A-6 — Supabase staging initialization: BLOCKED at Phase 1
+
+**This milestone was requested on the basis that the owner had created
+`.env.staging`. That had not happened. The file does not exist.**
+
+```text
+STAGING_SUPABASE_CREATED    = YES
+STAGING_SUPABASE_ISOLATED   = YES
+STAGING_DATABASE_IDENTIFIED = BLOCKED_EXTERNAL
+STAGING_MIGRATIONS_APPLIED  = BLOCKED_EXTERNAL
+STAGING_AUTH_REACHABLE      = YES
+STAGING_STORAGE_VERIFIED    = BLOCKED_EXTERNAL
+STAGING_SEED_VERIFIED       = BLOCKED_EXTERNAL
+```
+
+`.env.staging` is **absent** from the repository root, `apps/web`, `apps/api`,
+`$HOME`, `/tmp` and the shell environment. It is correctly **gitignored**
+(`.gitignore:19`) and correctly **untracked** — the two properties that were
+requested are both already true, because there is no file to have either.
+
+**Phase 1 confirms the P2A-5 fix working in the real repository:**
+
+```text
+ENVIRONMENT=staging  →  ConfigurationError: requires '.env.staging', which does
+                         not exist. Refusing to start rather than fall back…
+```
+
+Correct, and the reason the rest of the milestone cannot proceed: there is no
+staging configuration to load. Proceeding would have required the one action the
+milestone forbids — substituting development configuration.
+
+### One new fact: the staging ref is real, isolated, and reachable
+
+Earlier entries (B.8) recorded that "the only Supabase ref anywhere on this
+machine is the development one." **That is now superseded.** The staging ref from
+the P2A-2 work, `docs/STAGING_SUPABASE_SETUP.md` §3, exists and is reachable:
+
+| Check | Result |
+|---|---|
+| Staging ref | `vfewnfwyagcxtaxbmwqb` |
+| Development ref | `zyrmlnpvylhcpyaoizyz` |
+| **Different projects** | ✅ **YES** |
+| `/auth/v1/health` | reachable, `401` without a key — as expected for anon |
+| JWKS | ✅ 1 key, `ES256` — what `PyJWKClient` expects |
+
+So `STAGING_SUPABASE_ISOLATED = YES` is already **behaviourally** proven, not
+merely a ref comparison: staging rejected the *development* publishable key with
+*"This API key might also be owned by another Supabase project."* A Supabase key
+is bound to exactly one project.
+
+**What remains unproven is the one thing a ref cannot prove: which database backs
+that project.** Isolation of the *project* does not establish identity of the
+*database* — that needs `SELECT current_database()`, which needs a
+`DIRECT_DATABASE_URL` this machine does not have.
+
+### Nothing was run against anything
+
+No database connection, no `alembic upgrade head`, no bucket created, no probe
+object, no seed, no server started, no development resource touched — not even
+read-only. `caprep` is named in the brief as a database that must not be
+connected to, and reading its name would prove nothing about staging.
+
+`alembic upgrade head` remains deliberately unrun. It is the irreversible action
+in this milestone and the target is still unproven. The head is `6c3f7b0a0c13`,
+and CI already proves upgrade → downgrade → upgrade, so the chain is sound; only
+the **target** is missing.
+
+### Gates — all green, re-verified at `bd02ba5`
+
+| Gate | Result |
+|---|---|
+| `ruff check` / `format --check` | ✅ All checks passed / 155 formatted |
+| `alembic check` | ✅ No new upgrade operations |
+| `pytest` Redis **ON** | ✅ **859 passed**, 246 skipped |
+| `pytest` Redis **OFF** | ✅ **859 passed**, 246 skipped |
+| `npm test` | ✅ 248/248 |
+| `typecheck` / `lint` / `build` | ✅ OK / OK / OK |
+| `check_secrets` worktree/staged/HEAD | ✅ CLEAN ×3 |
+
+No existing test was modified, skipped or weakened.
+
+### The one unblocking step
+
+```bash
+cd "/Users/tejasraykar/Downloads/CA Version 2/ca-prep-platform"
+cp .env.staging.example .env.staging
+code .env.staging
+```
+
+Fill it with the **staging** project `vfewnfwyagcxtaxbmwqb` only — never
+`zyrmlnpvylhcpyaoizyz`. Required: `SUPABASE_URL`, `SUPABASE_SECRET_KEY`,
+`DATABASE_URL` (pooler), `DIRECT_DATABASE_URL` (migrations). Do not send any
+value to the agent. `.env.staging` is already gitignored, so it cannot be
+committed by accident.
+
+**Still outstanding, unchanged and security-relevant:** rotate the exposed
+`sb_secret_` and `GOCSPX-` Google secrets. They are not in the repository and the
+scanner is clean, but pasting them exposed them.
 
 ## B.7 P2A-3 — Supabase staging validation: 4 of 6 proven
 

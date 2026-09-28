@@ -1,8 +1,82 @@
 # Staging Supabase Validation
 
-**Milestone:** P2A-4 — identity, migrations, seed against STAGING
-**Baseline commit:** `76c0d0e`
+**Milestone:** P2A-6 — Supabase staging initialization (re-run of P2A-4)
+**Baseline commit:** `bd02ba5`
 **Nothing deployed. No migration applied. No development resource touched.**
+
+---
+
+## P2A-6 addendum — still blocked at Phase 1, but one fact changed
+
+P2A-6 was requested on the basis that the owner had created `.env.staging`.
+**It has not.** The file does not exist in the repository root, `apps/web`,
+`apps/api`, `$HOME`, `/tmp`, or the environment. The blocker is identical to
+P2A-4's and is unchanged by it.
+
+```text
+STAGING_SUPABASE_CREATED    = YES
+STAGING_SUPABASE_ISOLATED   = YES
+STAGING_AUTH_REACHABLE      = YES
+STAGING_DATABASE_IDENTIFIED = BLOCKED_EXTERNAL
+STAGING_MIGRATIONS_APPLIED  = BLOCKED_EXTERNAL
+STAGING_STORAGE_VERIFIED    = BLOCKED_EXTERNAL
+STAGING_SEED_VERIFIED       = BLOCKED_EXTERNAL
+```
+
+**What did change:** P2A-4 recorded that the only Supabase ref on this machine
+was the development one. That is **superseded**. The staging project
+`vfewnfwyagcxtaxbmwqb` from P2A-2 exists, is a different project from
+`zyrmlnpvylhcpyaoizyz`, and is reachable — JWKS serves one `ES256` key and
+`/auth/v1/health` answers (401 without a key, correct for anon).
+
+`STAGING_SUPABASE_ISOLATED = YES` therefore stands on the **behavioural** proof
+recorded in `STAGING_SUPABASE_SETUP.md` §3, not on comparing two strings:
+staging rejected the development publishable key by name, which only happens
+when the two keys belong to different projects.
+
+### Why project isolation is not database identity
+
+These are different claims, and conflating them is exactly the error to avoid:
+
+| Claim | Proven by | Status |
+|---|---|---|
+| The staging **project** is not the dev project | key rejection, JWKS, `/auth/v1/*` | ✅ YES |
+| The **database** behind staging is a staging DB | `SELECT current_database()` | ❌ **BLOCKED** — no `DIRECT_DATABASE_URL` |
+
+An isolated project can still be pointed at any database. Until
+`current_database()` is read from the staging connection, the migration target is
+unproven, and `alembic upgrade head` stays unrun. It is the irreversible action
+in this milestone; the head `6c3f7b0a0c13` is known and CI already proves
+upgrade → downgrade → upgrade, so only the **target** is missing.
+
+### Non-sensitive facts recorded
+
+| Item | Value |
+|---|---|
+| Staging project ref | `vfewnfwyagcxtaxbmwqb` |
+| Development project ref | `zyrmlnpvylhcpyaoizyz` (must never be used in staging) |
+| Staging database name | **unknown** — not yet provable |
+| Migration head (expected) | `6c3f7b0a0c13` |
+| Seed result | not run — no staging connection |
+| Health result | not run — no staging connection |
+
+No secret, password, connection string, or token appears above, and none will.
+
+### Gates re-verified at `bd02ba5`
+
+859 backend tests with Redis both reachable and unreachable, 248/248 web,
+ruff, format, alembic check, typecheck, lint, build, and `check_secrets` CLEAN on
+all three scopes. No existing test modified, skipped, or weakened.
+
+### Still outstanding
+
+Rotate the exposed `sb_secret_` and `GOCSPX-` Google client secrets. They are not
+in the repository and the scanner is clean, but they were exposed by being
+pasted.
+
+---
+
+## P2A-4 record (retained)
 
 ---
 
