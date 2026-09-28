@@ -130,6 +130,12 @@ ALLOWLIST: tuple[tuple[str, str, str], ...] = (
         "db-url-with-password",
         "the documented example DSN in this scanner's own docstring",
     ),
+    (
+        "apps/api/tests/test_fill_staging_env.py",
+        "db-url-with-password",
+        "fake DSNs with a literal fake password; they assert the pooler/direct "
+        "rules, and the password is not a credential",
+    ),
 )
 
 

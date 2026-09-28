@@ -313,6 +313,55 @@ credential, and contained none of the five values the isolation proof requires.
 No database was connected, no migration was run, and no development resource was
 touched. All gates re-verified green: 821 backend, 248 web, secrets CLEAN ×3.
 
+## B.14 P2A-9 — filling `.env.staging` safely, and the mistakes it prevents
+
+**The blocker is unchanged: four values exist only in the owner's Supabase
+dashboard, and the agent cannot obtain them.** Two attempts to transfer them by
+hand have now failed in ways worth recording, because both produced a file that
+*looked* correct:
+
+1. **The dashboard PAGE was pasted in as a value.** 17 lines of UI text —
+   "Secret keys", "NAME→API KEY", the explanatory paragraphs — landed in the file
+   as bare lines, assigning nothing.
+2. **The secret key was split across two lines** by the dashboard's own display
+   wrapping (`sb_secret_y6Cq7` / `jmbSJRfvvbj0QfJDQ_hcaBhkM7`). Copied that way
+   it is not a key at all, and a reader skimming for `KEY=` would not notice.
+
+`scripts/fill_staging_env.py` replaces the hand-edit. It prompts with **echo off**,
+validates, and writes only if every check passes. The value never reaches the
+scrollback, a screen share, or a chat transcript.
+
+| Check | The failure it prevents |
+|---|---|
+| ref is not the development ref | staging silently pointed at `zyrmlnpvylhcpyaoizyz` |
+| both DSNs contain the staging ref | a development connection string pasted in |
+| `DIRECT_DATABASE_URL` is **not** a pooler port | **a half-applied schema** |
+| placeholders absent, decoded | a template reaching a live service |
+| secret key is one line | the dashboard's display wrapping |
+
+The pooler check is the one that matters most and is the reason this is not
+merely a convenience wrapper. `alembic upgrade` takes an advisory lock and runs a
+multi-statement migration in one transaction; a transaction-mode pooler can hand
+it a different connection between statements, leaving the version table and the
+schema disagreeing. Nothing reports that at the time — it surfaces on the next
+deploy, against a database nobody remembers migrating.
+
+### Two gaps found by testing the validators against real mistakes
+
+- **A password inside a DSN is percent-encoded**, so `YOUR_PASSWORD` and
+  `YOUR%5FPASSWORD` are different byte sequences. Checking the raw URL alone let
+  the literal through. Now checked on the decoded value, and a real encoded
+  password is still accepted.
+- **A newline inside a secret key was accepted.** That is precisely the wrapped
+  dashboard case, so the cheapest possible tell is now an explicit check.
+
+The scanner caught my own test fixtures first — realistic DSNs with a literal fake
+password tripped `db-url-with-password`, which is it working correctly. Allow-listed
+with a written reason, as the file's own convention requires.
+
+22 tests, 53 across both staging tools. 912 backend with Redis both reachable and
+unreachable (was 890), 248 web, ruff, format, alembic check, secrets CLEAN ×3.
+
 ## B.13 P2A-8 — `.env.staging` created, two secrets left
 
 **The file now exists.** It is gitignored, untracked, and contains no real
