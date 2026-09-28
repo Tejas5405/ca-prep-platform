@@ -313,6 +313,52 @@ credential, and contained none of the five values the isolation proof requires.
 No database was connected, no migration was run, and no development resource was
 touched. All gates re-verified green: 821 backend, 248 web, secrets CLEAN ×3.
 
+## B.16 P2A-11 — the preflight could give a false negative on an IPv6-only host
+
+**The operator's diagnosis was right, and acting on it found a real defect in my
+own gate.** A Supabase *direct* host is IPv6-only unless the project has the IPv4
+add-on; the *pooler* host is IPv4. Verified here:
+
+```text
+db.vfewnfwyagcxtaxbmwqb.supabase.co  →  AAAA only, no A record
+aws-0-<region>.pooler.supabase.com   →  A 44.216.29.125 (reachable)
+this sandbox                         →  no IPv6 route
+```
+
+`read_current_database()` used **`direct_database_url` only**. So on any machine
+without IPv6 it reported "could not connect" for a staging target that was
+perfectly reachable through the pooler — a false negative on the single check the
+script exists to perform, and one indistinguishable in the output from a genuinely
+wrong target.
+
+**Why the identity check may use either, while the migration may not:** reading
+the database name is one `SELECT current_database()`. It needs no session
+affinity, no advisory lock, and no multi-statement transaction — which are
+precisely the reasons Alembic must avoid the pooler. That asymmetry is exactly why
+the preflight and the migration are two separate commands rather than one.
+
+`read_current_database_any()` tries direct first, then pooler, and the verdict now
+says **which URL answered**. That matters to the operator: "the direct host is
+unreachable from here but the pooler works" is the fact you need before running a
+migration that *must* use the direct URL.
+
+### Two bugs the tests caught while doing this
+
+- **`verdict.detail += …` on a frozen dataclass** raised `FrozenInstanceError` at
+  the exact moment the check *succeeded* — the worst possible time for a crash. Now
+  constructs a new `Verdict`.
+- **The draft called `read_current_database_any` twice**, opening a second
+  connection purely to recover a value already in hand. Asserted: exactly one
+  connection per run.
+
+Five tests for the fallback: pooler used when direct is unroutable, direct
+preferred when it works, both failing reports neither, empty URLs are skipped
+rather than attempted, and one connection per run.
+
+922 backend with Redis both reachable and unreachable (was 917), 248 web, ruff,
+format, alembic check, secrets CLEAN ×3. The scanner flagged the new test DSNs
+again — same rule, different file — allow-listed with a written reason.
+
 ## B.15 P2A-10 — a real security finding, and a correction to §B.14
 
 **I got the Sonar scale backwards, and the operator caught it.** Recording that

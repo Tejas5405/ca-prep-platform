@@ -197,7 +197,7 @@ def check_database_name(name: str | None, forbidden: set[str]) -> Verdict:
 
 
 def read_current_database(url: str) -> str | None:
-    """Ask the server its own name. Read-only, one statement, no DDL.
+    """Ask one server its own name. Read-only, one statement, no DDL.
 
     Returns None if the connection could not be made. The caller reports that as a
     failure WITHOUT the exception text, because a psycopg DSN error can embed the
@@ -216,6 +216,37 @@ def read_current_database(url: str) -> str | None:
             engine.dispose()
     except Exception:  # noqa: BLE001 - deliberately broad; the message may leak a DSN
         return None
+
+
+def read_current_database_any(urls: list[tuple[str, str]]) -> tuple[str | None, str | None]:
+    """Ask the server its own name, trying each URL in turn.
+
+    Returns `(database_name, url_used)`. `url_used` is None when every attempt
+    failed, and the caller reports that WITHOUT exception text, because a psycopg
+    DSN error can embed the URL it failed on.
+
+    WHY MORE THAN ONE URL
+    ---------------------
+    A Supabase *direct* host is IPv6-only on a project without the IPv4 add-on,
+    while the *pooler* host is IPv4. A machine with no IPv6 route therefore cannot
+    reach the direct host at all - and an earlier version of this function used
+    the direct URL only, so it reported "could not connect" for a staging target
+    that was perfectly reachable through the pooler. That is a false negative on
+    the one check this whole script exists to perform.
+
+    Reading the database name is a single `SELECT current_database()`: it needs no
+    session affinity, no advisory lock, and no multi-statement transaction. Those
+    are the reasons Alembic must avoid the pooler, and none of them apply here.
+    So the identity check may legitimately use either, while the MIGRATION still
+    has to use the direct one - and that asymmetry is why the preflight and the
+    migration are separate steps rather than one command.
+    """
+    for label, url in urls:
+        if url:
+            name = read_current_database(url)
+            if name is not None:
+                return name, label
+    return None, None
 
 
 #: The keys that must be non-empty before any staging verification can mean
@@ -343,8 +374,15 @@ def main() -> int:
     # it safe to open one. Opening it earlier is how a verification script becomes
     # the thing that touches the wrong database.
     if all(v.ok for v in verdicts):
-        direct = settings.direct_database_url or settings.database_url
-        if not direct:
+        # Try the DIRECT url first, then the pooler. The order matters only for the
+        # message; both are legitimate for a single read-only SELECT, and a host
+        # family the machine cannot route (IPv6-only direct host on an IPv4-only
+        # network) must not read as an unproven target.
+        candidates = [
+            ("direct", settings.direct_database_url),
+            ("pooler", settings.database_url),
+        ]
+        if not any(url for _, url in candidates):
             verdicts.append(
                 Verdict(
                     "current_database()",
@@ -352,17 +390,36 @@ def main() -> int:
                     "neither DATABASE_URL nor DIRECT_DATABASE_URL is set",
                 )
             )
-        elif (name := read_current_database(direct)) is None:
+            name, via = None, None
+        else:
+            # Called ONCE. An earlier draft called it twice, which meant opening a
+            # second connection purely to recover a value already in hand.
+            name, via = read_current_database_any(candidates)
+
+        if name is None and via is None and any(url for _, url in candidates):
+            hosts = ", ".join(f"{label}={url_host(url)}" for label, url in candidates if url)
             verdicts.append(
                 Verdict(
                     "current_database()",
                     False,
-                    "could not connect using the staging direct URL "
-                    f"(host {url_host(direct)}); the DSN is deliberately not shown",
+                    f"could not connect using either staging URL ({hosts}); "
+                    "the DSNs are deliberately not shown. A host that resolves but "
+                    "will not connect is often an address family this machine "
+                    "cannot route (a Supabase direct host is IPv6-only)",
                 )
             )
-        else:
-            verdicts.append(check_database_name(name, forbidden_dbs))
+        elif name is not None:
+            verdict = check_database_name(name, forbidden_dbs)
+            # Say which URL answered, because "the direct host is unreachable from
+            # here but the pooler works" is a fact the operator needs before
+            # running a migration that MUST use the direct URL.
+            #
+            # A NEW Verdict, not a mutation: the dataclass is frozen, and appending
+            # to `detail` would raise FrozenInstanceError at exactly the moment the
+            # check finally SUCCEEDS - the worst possible time for a crash.
+            verdicts.append(
+                Verdict(verdict.name, verdict.ok, f"{verdict.detail} (read via the {via} URL)")
+            )
     else:
         verdicts.append(
             Verdict(

@@ -195,6 +195,77 @@ class TestTheGateRefusesBeforeConnecting:
         assert "debug" in out, "the failing field should still be named"
 
 
+class TestItFallsBackWhenTheDirectHostIsUnroutable:
+    """A Supabase direct host is IPv6-only; the pooler is IPv4.
+
+    The preflight used to read the database name from the DIRECT url only, so on a
+    machine with no IPv6 route it reported "could not connect" for a staging target
+    that was perfectly reachable through the pooler. That is a false negative on the
+    one check this script exists to perform, and it is indistinguishable from a
+    genuinely wrong target in the output.
+    """
+
+    @staticmethod
+    def _urls():
+        return [
+            ("direct", f"postgresql://p:pw@db.{STAGING_REF}.supabase.co:5432/postgres"),
+            ("pooler", "postgresql://p:pw@aws-0-eu-west-1.pooler.supabase.com:5432/postgres"),
+        ]
+
+    def test_it_falls_back_to_the_pooler(self, monkeypatch) -> None:
+        opened = []
+
+        def fake(url):
+            opened.append(url)
+            return None if "db." + STAGING_REF in url else "postgres"
+
+        monkeypatch.setattr(pf, "read_current_database", fake)
+        name, via = pf.read_current_database_any(self._urls())
+        assert (name, via) == ("postgres", "pooler")
+        assert len(opened) == 2, "the direct URL should have been tried first"
+
+    def test_it_prefers_the_direct_url_when_it_works(self, monkeypatch) -> None:
+        opened = []
+        monkeypatch.setattr(
+            pf, "read_current_database", lambda url: (opened.append(url), "postgres")[1]
+        )
+        name, via = pf.read_current_database_any(self._urls())
+        assert (name, via) == ("postgres", "direct")
+        assert len(opened) == 1, "no second connection once the first answers"
+
+    def test_all_failing_reports_no_name_and_no_url(self, monkeypatch) -> None:
+        monkeypatch.setattr(pf, "read_current_database", lambda url: None)
+        assert pf.read_current_database_any(self._urls()) == (None, None)
+
+    def test_empty_urls_are_skipped_not_attempted(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            pf, "read_current_database", lambda url: pytest.fail("opened an empty URL")
+        )
+        assert pf.read_current_database_any([("direct", None), ("pooler", None)]) == (
+            None,
+            None,
+        )
+
+    def test_it_is_called_once_per_run(self, tmp_path, monkeypatch) -> None:
+        """The draft called it twice, opening a second connection for nothing."""
+        calls = []
+        monkeypatch.setattr(
+            pf,
+            "read_current_database",
+            lambda url: (calls.append(url), "postgres")[1],
+        )
+        (tmp_path / ".env.staging").write_text(
+            f"ENVIRONMENT=staging\nSUPABASE_URL=https://{STAGING_REF}.supabase.co\n"
+            f"SUPABASE_SECRET_KEY=sb_secret_{'a' * 40}\n"
+            f"DIRECT_DATABASE_URL=postgresql://postgres.{STAGING_REF}:realpw@db."
+            f"{STAGING_REF}.supabase.co:5432/postgres\n"
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("DEBUG", raising=False)
+        assert run_main("--forbid-ref", DEV_REF) == 0
+        assert len(calls) == 1, f"opened {len(calls)} connections for one query"
+
+
 class TestUnfilledValuesAreNamed:
     """An operator must be told every blank at once, by NAME only.
 
