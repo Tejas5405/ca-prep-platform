@@ -23,6 +23,21 @@ from enum import Enum
 
 
 class PointsReason(str, Enum):
+    """EVENT vocabulary - what HAPPENED, in the service layer.
+
+    NOT the persisted contract. That is `app.models.enums.PointsReason`, which
+    mirrors the `ck_ledger_reason` CHECK constraint exactly. Only
+    `QUESTION_CORRECT` appears in both, and the two lists share nothing else, so
+    they are different vocabularies that happen to share a name. `_AWARDABLE` in
+    `app/repositories/progress.py` translates between them.
+
+    The seven members with no mapping (`DAILY_LOGIN`, `QUESTION_ATTEMPTED`, the
+    four `DOUBT_*` events, `REFERRAL_ACTIVATED`) are deliberately in-memory only:
+    they are scored by `POINTS` and used in `LedgerEntry`, but nothing writes them
+    to `points_ledger`. Persisting any of them needs a migration and is a separate
+    decision.
+    """
+
     DAILY_LOGIN = "DAILY_LOGIN"
     QUESTION_ATTEMPTED = "QUESTION_ATTEMPTED"
     QUESTION_CORRECT = "QUESTION_CORRECT"
@@ -34,6 +49,12 @@ class PointsReason(str, Enum):
     STREAK_7 = "STREAK_7"
     DAILY_CHALLENGE_CORRECT = "DAILY_CHALLENGE_CORRECT"
     REFERRAL_ACTIVATED = "REFERRAL_ACTIVATED"
+    # Persisted reasons with no fixed value: a badge's reward is configured by an
+    # admin and an adjustment is whatever the admin chose, so both arrive as
+    # `amount=` and never read POINTS. They live here so `_AWARDABLE` can name
+    # them and so the ledger's reason vocabulary is expressible in one enum.
+    BADGE_AWARDED = "BADGE_AWARDED"
+    ADMIN_ADJUSTMENT = "ADMIN_ADJUSTMENT"
 
 
 POINTS: dict[PointsReason, int] = {

@@ -56,16 +56,53 @@ WEAK_ACCURACY = 0.6
 STRONG_ACCURACY = 0.8
 MIN_ATTEMPTS_FOR_VERDICT = 5
 
-#: Points ledgers are append-only, so the reason vocabulary is a database CHECK.
-#: The service enum has more members than the constraint allows (there is no
-#: QUESTION_ATTEMPTED in the schema, for instance), so the mapping is explicit
-#: here. Awarding a reason the CHECK rejects is a 500 at write time, in the middle
-#: of a student's practice session.
+
+class UnpersistablePointsReason(RuntimeError):
+    """An award was requested that has no persisted ledger reason.
+
+    Raised rather than silently ignored. A points award that quietly writes
+    nothing is worse than one that fails: the user is told the badge was granted,
+    the badge is granted, and the points simply never arrive - with nothing in any
+    log to say so. That is the exact failure this exception exists to prevent.
+    """
+
+
+#: Points ledgers are append-only, so the reason vocabulary is a database CHECK
+#: (`ck_ledger_reason`, 11 values). That constraint - not this mapping - is the
+#: persisted contract, and it is what `app/models/enums.py` mirrors exactly.
+#:
+#: The service enum is a different thing: an EVENT vocabulary. It has members the
+#: database has never heard of (`DAILY_LOGIN`, the four `DOUBT_*` events,
+#: `REFERRAL_ACTIVATED`, `QUESTION_ATTEMPTED`) and lacks members the database
+#: requires. Only 1 of its 11 values (`QUESTION_CORRECT`) is also a persisted
+#: reason, so the two enums are NOT two versions of one list - they are two
+#: vocabularies that share a name, which is why this mapping is explicit.
+#:
+#: CONSEQUENCE, and the bug this fixes: a reason missing from here does not raise.
+#: `_award` returned 0 and wrote nothing, so `admin.py` awarding a badge with the
+#: SCHEMA enum's `BADGE_AWARDED` silently credited zero points - proven against a
+#: real database, with no error and no failing test. Adding `BADGE_AWARDED` and
+#: `ADMIN_ADJUSTMENT` below closes that, and the regression test asserts a written
+#: row rather than a return value.
+#:
+#: The seven service-only events stay OUT deliberately. Persisting them would be a
+#: schema change, and inventing DB values to make two enums overlap would trade a
+#: behavioural bug for an unnecessary migration. If any of them ever needs to be
+#: persisted, that is a separate product decision with its own migration.
 _AWARDABLE: dict[PointsReason, str] = {
     PointsReason.QUESTION_CORRECT: "QUESTION_CORRECT",
     PointsReason.MOCK_COMPLETED: "MOCK_COMPLETE",
     PointsReason.STREAK_7: "STREAK_MILESTONE",
     PointsReason.DAILY_CHALLENGE_CORRECT: "DAILY_CHALLENGE",
+    # Awarded by admin.py when a MANAGER grants a badge. The amount is the badge's
+    # configured `points_reward`, not a constant, so it arrives as `amount=` and
+    # bypasses the POINTS table.
+    PointsReason.BADGE_AWARDED: "BADGE_AWARDED",
+    # Verified 2026-09-28: present in the DB CHECK and in models/enums.py, but with
+    # NO reachable write path anywhere in the app - no admin points-adjust endpoint
+    # exists. Mapped so the contract is complete and an eventual caller cannot
+    # silently no-op; adding the caller is out of scope here.
+    PointsReason.ADMIN_ADJUSTMENT: "ADMIN_ADJUSTMENT",
 }
 
 
@@ -308,10 +345,39 @@ class SqlProgressRepository:
             return 0
 
         db_reason = _AWARDABLE.get(reason)
-        if db_reason is None:  # pragma: no cover - guarded by the mapping above
-            return 0
+        if db_reason is None:
+            # LOUD, deliberately. This used to `return 0`, which meant a caller
+            # asking for an unmapped reason got a silent no-op: no row, no error,
+            # no log. That is precisely how the admin badge award came to credit
+            # zero points while appearing to succeed.
+            #
+            # Raising is right because every current caller maps cleanly, so this
+            # can only be reached by a NEW event someone forgot to translate - and
+            # at that point the developer needs to be told, not left debugging a
+            # points total that is quietly short. A 0 here would read as "already
+            # awarded", which is a different and false statement.
+            raise UnpersistablePointsReason(
+                f"{getattr(reason, 'value', reason)!r} is not mapped to a persisted "
+                f"ledger reason. Mapped: {sorted(_AWARDABLE)}. Adding a value here "
+                f"means choosing a reason the ck_ledger_reason CHECK accepts, which "
+                f"is a schema decision - not a code one."
+            )
 
-        points = amount if amount is not None else gamification.POINTS[reason]
+        # `POINTS[...]` would raise a bare KeyError for BADGE_AWARDED and
+        # ADMIN_ADJUSTMENT, whose value is configured per award rather than fixed.
+        # Both current callers pass `amount=`, so this is unreachable today - but a
+        # future caller that forgets it should be told which field is missing, not
+        # handed a KeyError about a dict.
+        if amount is not None:
+            points = amount
+        elif reason in gamification.POINTS:
+            points = gamification.POINTS[reason]
+        else:
+            raise UnpersistablePointsReason(
+                f"{getattr(reason, 'value', reason)!r} has no fixed value in "
+                f"gamification.POINTS, so the award must pass an explicit `amount`. "
+                f"Known fixed values: {sorted(gamification.POINTS)}"
+            )
         await self._session.execute(
             pg_insert(PointsLedger)
             .values(

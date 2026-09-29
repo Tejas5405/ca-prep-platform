@@ -1071,8 +1071,15 @@ async def award_badge(
         return success({"awarded": False, "reason": "already earned"}, request_id=get_request_id())
 
     if badge.points_reward:
-        from app.models.enums import PointsReason
+        # The EVENT enum, not `models.enums.PointsReason`. The repository is typed
+        # for the event vocabulary, and it is the one that says "a badge was
+        # granted" - the schema enum names the PERSISTED reason and is translated
+        # by `_AWARDABLE`. Passing the schema enum here worked only by accident:
+        # both are str-valued, so the dict lookup matched on the string while the
+        # types disagreed. It also silently credited nothing before `_AWARDABLE`
+        # gained the entry, which is the bug this milestone fixes.
         from app.repositories.progress import SqlProgressRepository
+        from app.services.gamification import PointsReason
 
         # The EXISTING award path: it credits the ledger AND the day's activity row.
         # The amount comes from the badge catalogue (POINTS_REWARD), which

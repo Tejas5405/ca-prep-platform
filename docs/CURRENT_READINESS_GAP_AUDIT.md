@@ -283,6 +283,123 @@ apps/api/tests/test_rate_limit.py        # NEW
 
 ---
 
+## Appendix B — P0 #2 delivered: the duplicate `PointsReason`, and a silent no-op
+
+**Milestone:** P0 security control #2 · base `672c124`
+**Class:** data integrity. A points award that wrote nothing and reported success.
+
+## Root cause
+
+`PointsReason` existed twice, and the two are **not two versions of one list** —
+they are different vocabularies that share a name:
+
+| | members | in the DB `CHECK`? |
+|---|---|---|
+| `app/models/enums.py` | 11 | ✅ **exactly** |
+| `app/services/gamification.py` | 11 | ❌ **1 of 11 overlap** |
+
+The persisted contract is `ck_ledger_reason`, read live from `caprep_v2_test`:
+11 values, identical to `models/enums.py` and to the migration. The service enum
+is an **event** vocabulary — it has members the database has never heard of
+(`DAILY_LOGIN`, four `DOUBT_*`, `REFERRAL_ACTIVATED`, `QUESTION_ATTEMPTED`) and
+lacks ones the database requires. `_AWARDABLE` translates between them.
+
+**The bug.** `admin.py:1083` awarded a badge with the *schema* enum's
+`BADGE_AWARDED`, which had no `_AWARDABLE` key. `_award` therefore hit
+`return 0` and wrote nothing. Proven against a real database before the fix:
+
+```
+PROOF award() returned : 0
+PROOF ledger reasons   : []
+PROOF SILENT NO-OP     : True
+```
+
+The badge was granted, the request succeeded, and **zero points were credited** —
+no error, no log, no failing test.
+
+## Fix
+
+- `_AWARDABLE` gains `BADGE_AWARDED` and `ADMIN_ADJUSTMENT`. No migration: both
+  are already in the `CHECK`.
+- An unmapped reason now **raises `UnpersistablePointsReason`** instead of
+  returning 0. A `0` reads as "already awarded", which is a different and false
+  statement.
+- `POINTS[reason]` would have been a bare `KeyError` for the two new members, so
+  a missing `amount` now names the field it needs.
+- `admin.py` imports the **event** enum, the type the repository is declared
+  for. It previously worked only by accident — both enums are str-valued, so the
+  dict matched on the string while the types disagreed.
+
+### `ADMIN_ADJUSTMENT` reachability — verified, not assumed
+
+Checked before mapping, as required. It appears **only** in the enum, the ORM
+model and the migration. **There is no admin points-adjust endpoint anywhere** —
+the `MANUAL|POINTS|...` pattern at `admin.py:893` is a badge *criteria* enum,
+unrelated. So it is mapped for contract completeness: an eventual caller cannot
+silently no-op. Adding that caller is out of scope.
+
+### The seven service-only events stay unpersisted
+
+Persisting them would mean inventing DB values, i.e. a migration. Inventing a
+schema to make two enums overlap would trade a behavioural bug for an
+unnecessary migration. They remain in-memory, documented, and now fail loudly if
+anyone tries to write one.
+
+## Tests — 29 new, all five requirements
+
+`tests/test_points_reason.py` (unit) and
+`tests/integration/test_points_reason_persistence.py` (real database).
+
+1. `BADGE_AWARDED` maps and persists ✅
+2. `ADMIN_ADJUSTMENT` maps and persists ✅
+3. An unmapped event **raises** and writes nothing ✅
+4. The DB vocabulary is asserted against the literal `CHECK` values ✅
+5. Mutation-verified (below) ✅
+
+The persistence tests assert a **written row**, not a return value, because the
+return value is what lied.
+
+### Mutation verification
+
+| Mutation | Result |
+|---|---|
+| Remove both mappings **and** restore `return 0` (the original state) | **8 tests fail** |
+| Keep the mappings but restore the silent `return 0` | **1 fails** |
+
+Neither committed.
+
+### Two defects the tests caught in my own work
+
+- **A vacuous test.** `test_admin_adjustment_persists` was missing its
+  `run_in_database(database_url, body)` call, so the body never executed and it
+  passed while asserting nothing. Ruff's `RUF059` surfaced it as an unused
+  variable; reading the code confirmed the real problem.
+- **An invalid test value.** `amount=-15` hit a second CHECK I had not found:
+  `ck_profile_points_non_negative`. The ledger allows a negative adjustment; the
+  profile aggregate does not. Now a positive value, with the constraint
+  documented — a real product question, out of scope here.
+
+## Validation
+
+| Gate | Result |
+|---|---|
+| Focused (points + gamification + persistence) | ✅ **76 passed** |
+| Admin/badge/gamification integration | ✅ **29 passed** |
+| Full suite, **Redis ON** | ✅ **1212 passed**, 1 skipped |
+| Full suite, **Redis OFF** | ✅ **1212 passed**, 1 skipped |
+| `ruff check` / `format --check` | ✅ clean, 159 files |
+| mypy | ✅ **38 → 37**, `PointsReason` errors **1 → 0** |
+
+## Scope
+
+Four files. **No migration, no schema change, no CI edit, no staging change.**
+P0 #1's `identity.py`, `campus.py`, and rate limiting untouched — verified by
+diff.
+
+---
+
+---
+
 ## Recommendation
 
 The three P0 items are not missing features. Each is a control the codebase
