@@ -87,6 +87,7 @@ def problem(
     detail: str | None = None,
     type_slug: str = "about:blank",
     errors: list[dict[str, str]] | None = None,
+    extra: dict[str, Any] | None = None,
 ) -> JSONResponse:
     """RFC 7807-style error body.
 
@@ -109,4 +110,10 @@ def problem(
         body["detail"] = detail
     if errors:
         body["errors"] = errors
+    # `extra` exists for the handful of errors that carry a machine-readable
+    # companion field the RFC does not define - `retry_after` on a 429 is the
+    # only current caller. It is merged last so a caller cannot overwrite the
+    # type/title/status trio that callers branch on.
+    if extra:
+        body.update(extra)
     return JSONResponse(status_code=status, content=body, media_type="application/problem+json")

@@ -2906,9 +2906,68 @@
             ],
             "title": "Posthog Api Key"
           },
+          "rate_limit_assistant_per_minute": {
+            "default": 20,
+            "title": "Rate Limit Assistant Per Minute",
+            "type": "integer"
+          },
+          "rate_limit_assistant_prefix": {
+            "default": "/api/v1/assistant",
+            "title": "Rate Limit Assistant Prefix",
+            "type": "string"
+          },
+          "rate_limit_enabled": {
+            "default": true,
+            "title": "Rate Limit Enabled",
+            "type": "boolean"
+          },
+          "rate_limit_exempt_paths": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Rate Limit Exempt Paths",
+            "type": "array"
+          },
+          "rate_limit_fail_closed_paths": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Rate Limit Fail Closed Paths",
+            "type": "array"
+          },
+          "rate_limit_payment_per_minute": {
+            "default": 10,
+            "title": "Rate Limit Payment Per Minute",
+            "type": "integer"
+          },
+          "rate_limit_payment_prefix": {
+            "default": "/api/v1/payments",
+            "title": "Rate Limit Payment Prefix",
+            "type": "string"
+          },
           "rate_limit_per_minute": {
             "default": 100,
             "title": "Rate Limit Per Minute",
+            "type": "integer"
+          },
+          "rate_limit_trusted_proxies": {
+            "default": 0,
+            "title": "Rate Limit Trusted Proxies",
+            "type": "integer"
+          },
+          "rate_limit_upload_path": {
+            "default": "/api/v1/ingestion/uploads",
+            "title": "Rate Limit Upload Path",
+            "type": "string"
+          },
+          "rate_limit_upload_per_minute": {
+            "default": 5,
+            "title": "Rate Limit Upload Per Minute",
+            "type": "integer"
+          },
+          "rate_limit_window_seconds": {
+            "default": 60,
+            "title": "Rate Limit Window Seconds",
             "type": "integer"
           },
           "razorpay_base_url": {

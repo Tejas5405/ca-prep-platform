@@ -300,6 +300,51 @@ class Settings(BaseSettings):
     rate_limit_per_minute: int = 100
     mock_attempts_per_hour: int = 10
 
+    # ------------------------------------------------------- rate limiting
+    #: Master switch. Off means requests are served without counting, which is
+    #: the local-development default only: a deployment with this false is an
+    #: unmetered API, so it is a deliberate thing to have to set.
+    rate_limit_enabled: bool = True
+    #: Fixed window, in seconds. Every limit below is "per this many seconds",
+    #: which is why the signup-style budgets are expressed as a window rather
+    #: than a per-minute number.
+    rate_limit_window_seconds: int = 60
+    #: How many proxies in front of this app we operate. 0 (the local default)
+    #: means X-Forwarded-For is ignored entirely. This MUST be 1 on Render:
+    #: at 0 every anonymous request buckets by the proxy's address, and
+    #: ``client_address`` logs a warning on each one. See the module docstring.
+    rate_limit_trusted_proxies: int = 0
+    #: Routes that cost money or storage get their own, tighter budget.
+    rate_limit_assistant_per_minute: int = 20
+    rate_limit_upload_per_minute: int = 5
+    rate_limit_payment_per_minute: int = 10
+    rate_limit_assistant_prefix: str = "/api/v1/assistant"
+    rate_limit_payment_prefix: str = "/api/v1/payments"
+    rate_limit_upload_path: str = "/api/v1/ingestion/uploads"
+    #: Never metered. Health checks are polled by infrastructure that must not be
+    #: throttled, and the pricing catalogue is public, cheap and cacheable -
+    #: metering it only risks refusing a visitor who is still deciding whether to
+    #: buy anything. The webhook is deliberately NOT here: it is the only
+    #: anonymous route that mutates money, so it is metered and fails closed.
+    rate_limit_exempt_paths: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: [
+            "/health",
+            "/",
+            "/docs",
+            "/redoc",
+            "/openapi.json",
+            "/api/v1/payments/plans",
+        ]
+    )
+    #: Metered routes that are refused outright when Redis is unreachable.
+    #: Only the webhook, because a 503 there is one the provider retries and
+    #: the idempotency key makes safe. There is no /api/v1/auth/* entry because
+    #: no such route exists - authentication is Supabase, called from the
+    #: browser, so this API never sees a password.
+    rate_limit_fail_closed_paths: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["/api/v1/webhooks"]
+    )
+
     #: `NoDecode` matters and is easy to leave out: pydantic-settings treats a list
     #: field as JSON and parses it BEFORE any validator runs, so a plain
     #: ``CORS_ORIGINS=https://a.example,https://b.example`` raised a SettingsError at
@@ -341,6 +386,17 @@ class Settings(BaseSettings):
         Both spellings are in active use: the local stack sets the JSON form and a
         human editing a dashboard field writes the comma form. Accepting one and
         crashing on the other is a foot-gun, and both are unambiguous.
+        """
+        return _split_list(v)
+
+    @field_validator("rate_limit_exempt_paths", "rate_limit_fail_closed_paths", mode="before")
+    @classmethod
+    def split_rate_limit_paths(cls, v: object) -> object:
+        """As ``split_origins``, for the two rate-limit path lists.
+
+        Kept as a separate validator rather than folded into the one above so a
+        new list field does not silently skip comma-splitting - the failure mode
+        being a prefix that reads as a JSON blob and exempts nothing.
         """
         return _split_list(v)
 

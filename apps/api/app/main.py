@@ -46,6 +46,7 @@ from app.core.config import get_settings
 from app.core.dependencies import close_clients, request_id_ctx
 from app.core.envelope import problem
 from app.core.permissions import PermissionDenied, forbidden
+from app.core.rate_limit import RateLimitMiddleware
 from app.integrations.supabase_storage import StorageError
 
 settings = get_settings()
@@ -107,15 +108,44 @@ app = FastAPI(
     openapi_url="/openapi.json",
 )
 
+#: Added BEFORE the CORS middleware on purpose, and it reads backwards.
+# ``add_middleware`` PREPENDS, so the LAST call is the OUTERMOST layer. Calling
+#: it in the order the layers execute (outermost first) would give exactly the
+#: wrong stack: rate limiting outside CORS, and every 429 arriving at the browser
+#: with no CORS headers and therefore as an opaque network error, with none of
+#: the X-RateLimit-* headers readable.
+#:
+#: The resulting stack, outermost first, is:
+#:   request_context  (assigns X-Request-Id, so a 429 still carries one)
+#:   CORSMiddleware   (adds Access-Control-Expose-Headers to the 429)
+#:   RateLimit        (adds the 429)
+#:   routers
+#:
+#: `tests/test_rate_limit.py::test_middleware_sits_inside_cors` asserts this
+#: stack, because a comment explaining an inversion is exactly the kind of thing
+#: that stops being true silently.
+app.add_middleware(RateLimitMiddleware)
+
 # CORS. Vercel preview deployments use generated subdomains, so the allow-list is
 # configured explicitly per environment rather than pattern-matched in code.
+#
+# The X-RateLimit-* names must be listed here or the browser hides them: fetch
+# and XHR only surface response headers the server explicitly exposes, so a
+# limiter that sends them and a CORS config that does not expose them add up to
+# a client that can only find out it is being throttled by failing.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Request-Id"],
-    expose_headers=["X-Request-Id"],
+    expose_headers=[
+        "X-Request-Id",
+        "X-RateLimit-Limit",
+        "X-RateLimit-Remaining",
+        "X-RateLimit-Reset",
+        "Retry-After",
+    ],
 )
 
 
