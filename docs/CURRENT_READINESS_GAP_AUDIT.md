@@ -45,7 +45,7 @@ first is the error this audit exists to prevent.
 | Credentials | No leaked or distributed credentials | `check_secrets` **CLEAN** on worktree, staged, HEAD. `git ls-files` → 0 tracked `.env`. `.env.staging` mode `600`, gitignored, untracked, **0 commits** ever touching it | **DONE** | — | Rotate the two credentials exposed in chat (`sb_secret_` key, staging DB password). Outside the repo; does not change code status |
 | Env debris | No archive/environment debris in the repo | `git ls-files` matches for `archive\|debris\|backup\|.bak\|dump.rdb` → **0**. `dump.rdb` exists only in the parent workspace, untracked | **DONE** | — | None |
 | Gateway secrets | Gateway/provider secrets not stored in plaintext | `app/services/gateway_config.py` has **no** `encrypt`/`decrypt`/`Fernet`/`cipher` — a secret saved through it is stored as written | **NOT_DONE** | P1 | Encrypt at rest, or store a provider *reference* rather than the secret. Needs a key-management decision first |
-| Admin bootstrap | Bootstrap admin requires a **verified** email | `config.py:473 is_bootstrap_admin_email()` matches the **email string alone**. `identity.py:75` grants admin on that match. `email_verified` / `email_confirmed` appear **nowhere** in app code; no test covers it | **NOT_DONE** | **P0** | Carry `email_verified` from the Supabase JWT, require it before the admin grant, test that an unverified address is refused |
+| Admin bootstrap | Bootstrap admin requires a **verified** email | ✅ **DONE** — see Appendix A. `email_is_confirmed()` fails closed; 12 boundary tests; mutation-verified | **DONE** | — | If Supabase's project settings do not require confirmation, an operator's own first sign-in will land as STUDENT. **Enable "Confirm email" in the project**, or add a custom access-token hook |
 | Rate limiting | Per-IP / per-endpoint limits, `429` + `X-RateLimit-*` | `config.py:300` has `rate_limit_per_minute = 100` but **no middleware consumes it** (middleware files: 0). Only 2 ad-hoc `429` returns, in `assistant.py` and `mocks.py` | **PARTIAL** | **P0** | A real Redis-backed limiter wired as middleware; the config field is currently dead. Blueprint also names login 5/15min and admin upload 5/hour |
 | Monitoring | Sentry initialised | `sentry_dsn` is a **config field only** (`config.py:248`), with **no `sentry_sdk` call in `app/`**. `sentry-sdk` is in requirements | **NOT_DONE** | P1 | `sentry_sdk.init()` at startup gated on `sentry_dsn`; test that a configured DSN initialises and an unset one does not |
 
@@ -85,7 +85,118 @@ first is the error this audit exists to prevent.
 
 ---
 
-## 4. What is already complete
+## Appendix A — P0 #1 delivered: bootstrap admin requires a confirmed email
+
+**Milestone:** P0 security control #1 · base `6d93e35`
+**Class:** privilege escalation. A control the code *appeared* to have and did not.
+
+## Root cause
+
+`get_current_user` granted `ADMIN` on **one** condition — the token's email
+appearing in `BOOTSTRAP_ADMIN_EMAILS`:
+
+```python
+is_admin_email=(
+    principal.email is not None and settings.is_bootstrap_admin_email(principal.email)
+)
+```
+
+The email in a Supabase access token is whatever the identity provider asserted at
+signup. Unless the project requires confirmation, **nothing has proved the person
+controls that mailbox** — so the allow-list was not a list of operators, it was a
+list of addresses anyone could claim. Anyone able to sign up as the configured
+address became an administrator.
+
+## Behaviour, before and after
+
+| Case | Before | After |
+|---|---|---|
+| bootstrap email, `email_verified=True` | ADMIN | **ADMIN** (unchanged) |
+| bootstrap email, `email_verified=False` | **ADMIN** ❌ | **STUDENT** |
+| bootstrap email, no confirmation claim | **ADMIN** ❌ | **STUDENT** (fails closed) |
+| bootstrap email, `"false"` / `{}` / `0` | **ADMIN** ❌ | **STUDENT** |
+| non-bootstrap email, verified | STUDENT | **STUDENT** (unchanged) |
+| non-bootstrap email, unverified | STUDENT | **STUDENT** (unchanged) |
+
+## Where the check lives
+
+One decision point. `identity.py` is the **only** caller of
+`repo.provision(..., is_admin_email=True)` in the codebase, so the requirement sits
+at the privilege boundary itself rather than in a helper each route calls. Verified
+by grep before editing, not assumed.
+
+## How the confirmation evidence is obtained
+
+From the **already signature-verified token claims** — `Principal.claims`, produced
+by `jwt.decode` against the project's JWKS with pinned algorithms, audience and
+issuer. No second auth mechanism, no new network call, no client-supplied field.
+
+**What Supabase actually provides matters here.** Its documented access-token claims
+are `iss, aud, exp, iat, sub, role, aal, session_id, email, phone, is_anonymous`
+plus `app_metadata` / `user_metadata`. There is **no `email_verified` claim**; the
+authoritative fact is `email_confirmed_at` on the *user object*, which is not in the
+token. So `email_is_confirmed()` accepts, in order:
+
+1. `email_confirmed_at` — the real field, if a hook or custom claim carries it
+2. `email_verified` — what a custom access-token hook most often adds
+3. the same two inside `app_metadata` — server-written, so trusted
+
+**`user_metadata` is never read.** Supabase documents it as editable by the user
+without any check, so it would be self-asserted by the person trying to become an
+administrator.
+
+### Two subtleties the tests forced
+
+- **`email_verified` must be the boolean `True`.** The first implementation
+  accepted any non-empty string, so `"false"` granted ADMIN — and `bool("false")`
+  is `True` in Python. Caught by the malformed-value cases, not by reading the
+  code. A string now counts only for `email_confirmed_at`, which is the shape
+  Supabase actually returns.
+- **Refusal is a log line, not a 403.** The account is created as a `STUDENT` so an
+  operator whose address is not yet confirmed can still sign in and confirm it.
+  Raising would lock a real operator out of their own platform with no explanation.
+
+## Tests
+
+**12 new cases** in `tests/integration/test_identity_provisioning.py`, all driving
+the **real** boundary: a signed-in request through the app with only
+`get_current_principal` overridden, then the role read back from the database via
+`/api/v1/me`. A helper-only test would pass even if the boundary stopped calling it.
+
+`test_a_configured_bootstrap_email_becomes_an_admin_and_nothing_else_does` asserted
+the *vulnerable* behaviour, so it now supplies `email_verified=True` and keeps
+testing what it was written to test — the address matching. Its near-miss cases
+(`admin@caprep.in.evil.example`, `administrator@caprep.in`) are preserved.
+
+## Mutation verification
+
+| Mutation | Result |
+|---|---|
+| Remove the `email_is_confirmed` condition (restores the vulnerability) | **10 tests fail**, including the core escalation case |
+| Loosen the string rule back to truthiness | **2 fail** (`string-false`, `string-no`) |
+
+Neither mutation was committed.
+
+## Validation
+
+| Gate | Result |
+|---|---|
+| Focused (identity, security, roles, permission matrix) | ✅ **112 passed** |
+| Identity file alone | ✅ **29 passed** |
+| Full suite, **Redis ON** | ✅ **1183 passed**, 1 skipped |
+| Full suite, **Redis OFF** | ✅ **1183 passed**, 1 skipped |
+| `ruff check` / `format --check` | ✅ clean, 157 files |
+| mypy | ✅ **38 errors — unchanged**, none added |
+
+The full-suite count rose from 922 to 1183 because the Postgres integration tests
+were **skipped** without `TEST_DATABASE_URL`; they now run against
+`caprep_v2_test`. The development database `caprep` was never connected to.
+
+## Scope
+
+Exactly two files changed. `PointsReason`, rate limiting, `campus.py`, migrations,
+CI, and staging were **not** touched — verified by diff, not asserted.
+
 
 Do not redo any of this.
 
@@ -106,7 +217,7 @@ Do not redo any of this.
 
 | # | Item | Why it matters |
 |---|---|---|
-| 1 | **Bootstrap admin requires a verified email** | Admin is granted on an unverified address string. Anyone who can sign up with the configured address becomes admin. **Highest-severity finding here** |
+| ~~1~~ | ~~Bootstrap admin verified email~~ | ✅ **DONE** — Appendix A |
 | 2 | **Duplicate `PointsReason`** | Two enums with disjoint members; mypy proves the mismatch. Points events silently fail to match |
 | 3 | **Rate limiting** | The config field is dead code. A `100/min` value nothing enforces is worse than none, because it reads as protection |
 | 4 | **mypy 38 errors + CI gate** | Known; mechanical, but must be ratchet-style |
@@ -130,7 +241,7 @@ Do not redo any of this.
 
 ## 8. Recommended execution order
 
-1. **Bootstrap admin email verification** (P0, security) — small, isolated, high value
+1. ~~**Bootstrap admin email verification**~~ — ✅ **done**, Appendix A
 2. **Collapse `PointsReason`** (P0, correctness) — mypy pinpoints the crossover
 3. **Wire rate limiting** (P0) — the field exists; make it real
 4. **mypy 38 → 0, then add to CI** (P1) — *after* 1–2, which change signatures

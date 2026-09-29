@@ -16,6 +16,8 @@ with one more step, and the step is the one that loses users.
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,6 +26,8 @@ from app.core.dependencies import get_db
 from app.core.security import Principal, get_current_principal
 from app.models.user import User
 from app.repositories.users import SqlUserRepository
+
+logger = logging.getLogger(__name__)
 
 #: Roles that may answer doubts, review content and see other students' threads.
 #: Mirrors `app.lib.roles` in the frontend - the two lists are asserted equal by a
@@ -41,6 +45,77 @@ def is_staff(user: User) -> bool:
     queue they were promoted to work.
     """
     return user.role in STAFF_ROLES
+
+
+#: Claims that can carry Supabase's email-confirmation state, most specific first.
+#:
+#: Supabase does NOT put an `email_verified` claim in an access token. Its
+#: documented claims are iss/aud/exp/iat/sub/role/aal/session_id/email/phone/
+#: is_anonymous, with app_metadata and user_metadata as optional bags. The
+#: authoritative "is this address confirmed" fact lives on the USER OBJECT as
+#: `email_confirmed_at` (null means not confirmed), which is not in the token.
+#:
+#: So these are checked in order of trustworthiness, and all of them are treated
+#: as evidence only:
+#:
+#:   * `email_confirmed_at` - the real field, if a hook or a custom claim carries it.
+#:   * `email_verified`      - what a custom access-token hook most often adds, and
+#:                              what the milestone brief names. Honoured ONLY when
+#:                              it is the boolean True: a string "false", the int 0,
+#:                              or any other value is not a confirmation.
+#:   * `app_metadata.email_verified` / `.email_confirmed_at` - server-written, and
+#:                              therefore trusted ahead of user_metadata.
+#:
+#: `user_metadata` is deliberately NOT consulted. Supabase states it is editable by
+#: the user without checks, so a claim read from it would be self-asserted by the very
+#: person trying to become an administrator.
+_CONFIRMATION_CLAIMS = ("email_confirmed_at", "email_verified")
+
+
+def email_is_confirmed(claims: dict[str, object] | None) -> bool:
+    """Whether the verified token proves this address was confirmed.
+
+    FAIL CLOSED. Every outcome other than positive, unambiguous evidence of
+    confirmation returns False, because the caller's decision is a privilege
+    grant: an absent claim, a null claim, a malformed claim, or a claim naming
+    something this function does not recognise must all read as "not proven".
+
+    The narrow reading of `email_verified` is deliberate. ``bool("false")`` is
+    True in Python, and ``bool(0)`` is False, so a naive truthiness test would
+    read the STRING "false" as a confirmation - turning the one value an attacker
+    is most likely to be able to influence into a grant. Only a real boolean True
+    counts, and a non-empty `email_confirmed_at` string counts because that is the
+    shape Supabase actually returns.
+    """
+    if not isinstance(claims, dict):
+        return False
+
+    def _bag(name: str) -> dict[str, object]:
+        value = claims.get(name)
+        return value if isinstance(value, dict) else {}
+
+    sources: tuple[dict[str, object], ...] = (claims, _bag("app_metadata"))
+
+    for source in sources:
+        for name in _CONFIRMATION_CLAIMS:
+            if name not in source:
+                continue
+            value = source[name]
+            if value is None or value is False:
+                continue
+            if value is True:
+                return True
+            # A STRING is a confirmation ONLY for the timestamp claim, which is
+            # what Supabase actually returns. It is deliberately NOT accepted for
+            # `email_verified`: a boolean field arriving as the string "false" is a
+            # plausible shape for a custom hook or a hand-rolled claim, and
+            # treating any non-empty string as a confirmation would promote on the
+            # one value an attacker has the most reason to arrange. A stricter
+            # reading here fails closed, which is the correct direction to be
+            # wrong in.
+            if name == "email_confirmed_at" and isinstance(value, str) and value.strip():
+                return True
+    return False
 
 
 async def get_current_user(
@@ -67,13 +142,45 @@ async def get_current_user(
     if barred is not None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=barred)
 
+    # BOOTSTRAP ADMIN IS A PRIVILEGE GRANT, SO IT NEEDS PROOF OF THE ADDRESS.
+    #
+    # Before this check, the only condition was "the token's email is in the
+    # allow-list" - and the email in a Supabase token is self-asserted at signup
+    # unless the project requires confirmation. So anyone able to sign up as
+    # `BOOTSTRAP_ADMIN_EMAILS` became an administrator, which is the exact
+    # privilege escalation this closes.
+    #
+    # Both conditions are required, and the confirmation check fails closed. The
+    # decision lives HERE, at the one place the role is chosen, rather than in a
+    # helper each route calls - there is exactly one caller of `provision` with
+    # `is_admin_email=True` in the codebase, which is what makes this a boundary
+    # rather than one of several checks.
+    is_admin_email = bool(
+        principal.email is not None
+        and settings.is_bootstrap_admin_email(principal.email)
+        and email_is_confirmed(principal.claims)
+    )
+    if (
+        principal.email is not None
+        and settings.is_bootstrap_admin_email(principal.email)
+        and not is_admin_email
+    ):
+        # Logged, never raised: the account is still created, as a STUDENT, so the
+        # person can sign in and confirm their address. Refusing the request
+        # instead would leave a real operator locked out of their own platform
+        # with a 403 and no explanation, which is a worse failure than a missing
+        # privilege and a log line naming the reason.
+        logger.warning(
+            "Bootstrap admin NOT granted to %s: the token carries no evidence that "
+            "the address is confirmed. A STUDENT account was created instead.",
+            principal.email,
+        )
+
     user = await repo.provision(
         session,
         auth_user_id=principal.auth_user_id,
         email=principal.email,
-        is_admin_email=(
-            principal.email is not None and settings.is_bootstrap_admin_email(principal.email)
-        ),
+        is_admin_email=is_admin_email,
     )
     # Checked AGAIN, because `provision` may have returned a row it did not
     # create: when two requests race for a new account, the loser recovers by

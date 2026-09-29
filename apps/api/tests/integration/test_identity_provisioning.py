@@ -286,6 +286,11 @@ def test_a_configured_bootstrap_email_becomes_an_admin_and_nothing_else_does(
     administrative must not be promoted, or the allow-list is decoration. The
     near-misses are the shapes a naive `endswith` or `startswith` check would let
     through - a subdomain suffix and a longer local part.
+
+    Every principal here carries `email_verified=True`, because promotion requires
+    proof that the address is confirmed. That second condition is asserted
+    separately, and exhaustively, in the class below - this test is about the
+    MATCHING, so it supplies matching evidence and varies only the address.
     """
     monkeypatch.setenv("BOOTSTRAP_ADMIN_EMAILS", BOOTSTRAP_EMAIL)
     get_settings.cache_clear()
@@ -304,7 +309,7 @@ def test_a_configured_bootstrap_email_becomes_an_admin_and_nothing_else_does(
                 auth_user_id=sub,
                 email=email,
                 role="STUDENT",
-                claims={"sub": sub},
+                claims={"sub": sub, "email_verified": True},
             )
             with signed_in(principal) as client:
                 response = client.get("/api/v1/me")
@@ -312,6 +317,164 @@ def test_a_configured_bootstrap_email_becomes_an_admin_and_nothing_else_does(
             assert response.json()["data"]["role"] == expected, email
 
     run_in_database(database_url, body)
+
+
+# ------------------------------------------- the confirmation requirement
+
+
+def _role_for(
+    database_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    claims: dict[str, object],
+    *,
+    email: str | None = BOOTSTRAP_EMAIL,
+) -> str:
+    """Sign in once and return the role the app actually stored.
+
+    Drives the REAL boundary: a signed-in request through the app with only
+    `get_current_principal` overridden, then the role read back from the database
+    through `/api/v1/me`. Testing a helper in isolation would pass even if the
+    boundary stopped calling it.
+    """
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_EMAILS", BOOTSTRAP_EMAIL)
+    get_settings.cache_clear()
+    seen: list[str] = []
+
+    async def body(session) -> None:
+        sub = f"11111111-0000-4000-8000-{len(seen):012d}"
+        seen.append(sub)
+        principal = Principal(auth_user_id=sub, email=email, role="STUDENT", claims=claims)
+        with signed_in(principal) as client:
+            response = client.get("/api/v1/me")
+        assert response.status_code == 200, response.text
+        seen.append(response.json()["data"]["role"])
+
+    run_in_database(database_url, body)
+    return seen[-1]
+
+
+class TestBootstrapAdminRequiresAConfirmedEmail:
+    """The privilege escalation this milestone closes.
+
+    Before the fix, `get_current_user` granted ADMIN on ONE condition: the token's
+    email appeared in `BOOTSTRAP_ADMIN_EMAILS`. The email in a Supabase access token
+    is whatever the identity provider asserted at signup, and unless the project
+    requires confirmation, nothing has proved the person controls that mailbox. So
+    the allow-list was not a list of operators - it was a list of addresses anyone
+    could claim.
+    """
+
+    def test_a_verified_bootstrap_email_is_still_promoted(
+        self, database_url: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The fix must not lock the operator out of their own platform."""
+        assert _role_for(database_url, monkeypatch, {"email_verified": True}) == "ADMIN"
+
+    def test_a_confirmed_at_timestamp_also_counts(
+        self, database_url: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`email_confirmed_at` is the field Supabase actually documents."""
+        claims = {"email_confirmed_at": "2026-01-01T00:00:00Z"}
+        assert _role_for(database_url, monkeypatch, claims) == "ADMIN"
+
+    def test_an_unverified_bootstrap_email_is_NOT_promoted(
+        self, database_url: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The vulnerability itself."""
+
+    @pytest.mark.parametrize(
+        "value",
+        ["false", "", 0, {}, [], "no"],
+        ids=["string-false", "empty-string", "zero", "dict", "list", "string-no"],
+    )
+    def test_a_malformed_confirmation_value_fails_closed(
+        self, database_url: str, monkeypatch: pytest.MonkeyPatch, value: object
+    ) -> None:
+        """An unrecognised shape is not evidence.
+
+        `bool("false")` is True in Python, so a truthiness check here would promote
+        on the single value an attacker has the most reason to arrange.
+        """
+        assert _role_for(database_url, monkeypatch, {"email_verified": value}) == "STUDENT"
+
+    def test_a_null_confirmation_claim_fails_closed(
+        self, database_url: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`email_confirmed_at: null` is Supabase's own "not confirmed"."""
+        assert _role_for(database_url, monkeypatch, {"email_confirmed_at": None}) == "STUDENT"
+
+    def test_user_metadata_is_never_trusted(
+        self, database_url: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`user_metadata` is editable by the user without any check.
+
+        Supabase documents this explicitly, so a claim read from there would be
+        self-asserted by the very person trying to become an administrator.
+        """
+        claims = {"user_metadata": {"email_verified": True}}
+        assert _role_for(database_url, monkeypatch, claims) == "STUDENT"
+
+    def test_app_metadata_is_trusted(
+        self, database_url: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`app_metadata` is server-written, so it is legitimate evidence."""
+        claims = {"app_metadata": {"email_verified": True}}
+        assert _role_for(database_url, monkeypatch, claims) == "ADMIN"
+
+    def test_a_non_bootstrap_email_is_unaffected(
+        self, database_url: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Case 4: the change must not alter ordinary sign-up."""
+        role = _role_for(
+            database_url, monkeypatch, {"email_verified": True}, email="student@example.com"
+        )
+        assert role == "STUDENT"
+
+    def test_an_unverified_non_bootstrap_email_is_unaffected(
+        self, database_url: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Case 5: existing non-bootstrap behaviour is unchanged."""
+        role = _role_for(database_url, monkeypatch, {}, email="student@example.com")
+        assert role == "STUDENT"
+
+    def test_a_refusal_is_logged_rather_than_raised(
+        self,
+        database_url: str,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The account is created as a STUDENT, not refused with a 403.
+
+        An operator whose address is not yet confirmed must still be able to sign
+        in and confirm it. The log line is what makes the missing privilege
+        diagnosable instead of mysterious.
+        """
+        monkeypatch.setenv("BOOTSTRAP_ADMIN_EMAILS", BOOTSTRAP_EMAIL)
+        get_settings.cache_clear()
+
+        async def body(session) -> None:
+            sub = "22222222-0000-4000-8000-000000000001"
+            principal = Principal(
+                auth_user_id=sub, email=BOOTSTRAP_EMAIL, role="STUDENT", claims={"sub": sub}
+            )
+            with caplog.at_level("WARNING", logger="app.core.identity"):
+                with signed_in(principal) as client:
+                    response = client.get("/api/v1/me")
+            assert response.status_code == 200, response.text
+            assert response.json()["data"]["role"] == "STUDENT"
+
+        run_in_database(database_url, body)
+        assert any("Bootstrap admin NOT granted" in record.message for record in caplog.records), (
+            "the refusal must be diagnosable from the log"
+        )
+
+        assert _role_for(database_url, monkeypatch, {"email_verified": False}) == "STUDENT"
+
+    def test_a_bootstrap_email_with_no_confirmation_claim_is_NOT_promoted(
+        self, database_url: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FAIL CLOSED on absence - the shape a default Supabase project sends."""
+        assert _role_for(database_url, monkeypatch, {}) == "STUDENT"
 
 
 def test_a_token_without_an_email_still_gets_a_student_account(database_url: str) -> None:
