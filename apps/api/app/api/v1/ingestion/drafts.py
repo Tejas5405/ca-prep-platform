@@ -88,6 +88,9 @@ class ReviewDraftIn(StrictRequest):
     topic_id: UuidRef | None = None
     year: int | None = Field(default=None, ge=1990, le=2100)
     attempt_id: UuidRef | None = None
+    # Optional: widen or correct the extracted quote while reviewing. Omit it
+    # and the draft's own extracted quote is promoted unchanged.
+    source_quote: str | None = Field(default=None, max_length=2000)
 
     # ---- content -------------------------------------------------------
     difficulty: str = "MEDIUM"
@@ -116,6 +119,7 @@ class ReviewDraftIn(StrictRequest):
         assert self.question_type is not None
         assert self.marks is not None
         return PromotionInput(
+            source_quote=self.source_quote,
             subject_id=self.subject_id,
             question_type=self.question_type,
             marks=self.marks,
@@ -185,6 +189,12 @@ async def list_drafts(
                 "reviewStatus": row.review_status,
                 "preview": row.preview,
                 "sourcePage": row.source_page,
+                # The verbatim excerpt the extraction claims this draft came from.
+                # The review UI puts it beside the question: approval is a
+                # comparison against the source, not a judgement call. Sent in
+                # the LIST response because the review queue is where it is read
+                # - a reviewer should not have to fetch each draft to see it.
+                "sourceQuote": row.source_quote,
                 "detectedYear": row.detected_year,
                 "detectedAttempt": row.detected_attempt,
                 "detectedMarks": row.detected_marks,

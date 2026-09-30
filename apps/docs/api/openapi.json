@@ -2648,6 +2648,18 @@
             ],
             "title": "Question Type"
           },
+          "source_quote": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Quote"
+          },
           "subject_id": {
             "anyOf": [
               {

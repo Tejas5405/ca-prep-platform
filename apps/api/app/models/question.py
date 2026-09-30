@@ -164,6 +164,9 @@ class Question(Base, UuidMixin, TimestampMixin, SoftDeleteMixin):
         UUID(as_uuid=True), ForeignKey("exam_sessions.id", ondelete="SET NULL"), nullable=True
     )
     source: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # Copied from the draft at promotion time. NULL for a hand-authored question,
+    # which has no source PDF; NOT NULL would reject those. See migration 0018.
+    source_quote: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_page: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     #: Supabase Storage path for the source PDF (private bucket).
     source_pdf_path: Mapped[str | None] = mapped_column(String(500), nullable=True)

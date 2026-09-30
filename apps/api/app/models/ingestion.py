@@ -221,6 +221,11 @@ class IngestionDraft(Base, UuidMixin, TimestampMixin):
 
     text: Mapped[str] = mapped_column(Text, nullable=False)
     #: Page in the source PDF, for traceability back to the original paper.
+    # VERBATIM substring of the extracted page this draft was derived from. The
+    # editor holds the PDF next to this text during review; without it, approving
+    # a question is a judgement call rather than a comparison. Nullable because a
+    # hand-authored question has no PDF behind it. See migration 0018.
+    source_quote: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_page: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
 
     #: Machine-detected, advisory only. An editor confirms or corrects these.

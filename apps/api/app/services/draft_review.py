@@ -126,6 +126,10 @@ class PromotionInput:
     difficulty: str = Difficulty.MEDIUM.value
     negative_marks: float = 0.0
     correct_answer: str | None = None
+    # Optional OVERRIDE of the extracted quote. Left None the draft's own
+    # source_quote is used, which is the common case. An editor who widens the
+    # excerpt to include the full statutory wording supplies it here.
+    source_quote: str | None = None
     model_answer: str | None = None
     explanation: str | None = None
     options: tuple[OptionInput, ...] = ()
@@ -145,6 +149,9 @@ class DraftState:
     job_id: UUID
     text: str
     review_status: str
+    # Verbatim excerpt from the extracted page, shown beside the draft during
+    # review and copied onto the question at promotion. See migration 0018.
+    source_quote: str | None = None
     source_page: int | None = None
     detection_confidence: float | None = None
     detected_marks: int | None = None
@@ -170,6 +177,13 @@ class DraftSummary:
     review_status: str
     preview: str
     source_page: int | None
+    # The verbatim source excerpt, carried in the LIST response rather than only
+    # on the detail fetch. The worklist is a list of DECISIONS, and a decision
+    # needs the source to decide against - a reviewer should not have to open
+    # every draft to discover whether it can be verified at all. A draft with no
+    # quote is one that must be rejected, and that has to be visible while
+    # scanning the queue.
+    source_quote: str | None
     detected_year: int | None
     detected_attempt: str | None
     detected_marks: int | None
@@ -447,6 +461,10 @@ def build_question_row(
         "year": payload.year,
         "attempt_id": payload.attempt_id,
         "source": "ICAI question paper (ingested)",
+        # The verbatim excerpt the editor verified this draft against. Copied
+        # here so a published question can always be traced to the exact line of
+        # the source page, without a second lookup through the draft.
+        "source_quote": (payload.source_quote or draft.source_quote or "").strip() or None,
         "source_page": draft.source_page,
         "source_pdf_path": source_path,
         "extraction_confidence": draft.detection_confidence,

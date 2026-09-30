@@ -174,6 +174,7 @@ class SqlDraftReviewStore:
                 review_status=row.review_status,
                 preview=preview_of(row.text),
                 source_page=row.source_page,
+                source_quote=row.source_quote,
                 detected_year=row.detected_year,
                 detected_attempt=row.detected_attempt,
                 detected_marks=row.detected_marks,
