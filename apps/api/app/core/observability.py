@@ -37,9 +37,97 @@ PII in a response body is not shipped off-box by default.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Final
 
 logger = logging.getLogger(__name__)
+
+
+#: Header names whose VALUES are replaced wholesale before an event leaves the
+#: process. Matched case-insensitively.
+#:
+#: `x-razorpay-signature` is here because it is an HMAC over a payment webhook;
+#: a captured signature plus a known body is enough to forge a replay, which is
+#: the one thing the fail-closed webhook design exists to prevent.
+SENSITIVE_HEADERS: Final[frozenset[str]] = frozenset(
+    {
+        "authorization",
+        "cookie",
+        "set-cookie",
+        "x-api-key",
+        "x-razorpay-signature",
+        "x-supabase-api-key",
+        "proxy-authorization",
+    }
+)
+
+REDACTED: Final = "[REDACTED]"
+
+
+def _redact_headers(headers: Any) -> Any:
+    """Return `headers` with sensitive values replaced, shape preserved.
+
+    Sentry represents request headers as either a dict or a list of
+    (name, value) pairs depending on SDK version and integration, so both are
+    handled rather than assuming one and silently missing the other.
+    """
+    if isinstance(headers, dict):
+        return {
+            name: (REDACTED if str(name).strip().lower() in SENSITIVE_HEADERS else value)
+            for name, value in headers.items()
+        }
+    if isinstance(headers, list):
+        out: list[Any] = []
+        for entry in headers:
+            if isinstance(entry, (list, tuple)) and len(entry) == 2:
+                name = entry[0]
+                if str(name).strip().lower() in SENSITIVE_HEADERS:
+                    out.append([name, REDACTED])
+                    continue
+            out.append(entry)
+        return out
+    return headers
+
+
+def before_send(event: Any, hint: dict[str, Any]) -> Any:
+    """Strip credentials from an event on its way out to Sentry.
+
+    WHY THIS EXISTS
+
+    An error report is a copy of program state travelling to a third party. The
+    FastAPI integration attaches the request, and the request carries an
+    `Authorization: Bearer ...`. That token is a live credential for the user who
+    hit the error, readable by anyone with access to the Sentry project, for as
+    long as the issue is retained.
+
+    WHY IT NEVER RAISES
+
+    Returning None drops the event; raising propagates into the SDK's own error
+    handling. A sanitizer that can fail is a sanitizer that can silently lose
+    exactly the errors it exists to protect. So every path returns the event,
+    and the failure case returns it UNSANITISED and logs loudly - a leak is bad,
+    but losing a production stack trace during an incident is worse, and the
+    operator needs to know the scrubber is broken.
+    """
+    try:
+        request = event.get("request")
+        if isinstance(request, dict) and "headers" in request:
+            request["headers"] = _redact_headers(request["headers"])
+        # Breadcrumb data and extra context reach Sentry through different
+        # fields, and a credential attached to an exception lands in one of them.
+        for bucket in ("extra", "contexts"):
+            section = event.get(bucket)
+            if isinstance(section, dict):
+                for value in section.values():
+                    if isinstance(value, dict) and "headers" in value:
+                        value["headers"] = _redact_headers(value["headers"])
+        return event
+    except Exception:
+        logger.exception(
+            "Sentry before_send scrubber failed; sending the event UNSANITISED. "
+            "Credentials in request headers may reach Sentry. Fix before relying "
+            "on this control."
+        )
+        return event
 
 
 def init_sentry(settings: Any) -> bool:
@@ -78,6 +166,8 @@ def init_sentry(settings: Any) -> bool:
             # deploy rather than to "sometime this week". No CI/CD here publishes
             # a release, so the commit SHA is the strongest available signal.
             release=_git_release(),
+            # Credentials are stripped on the way out, not on the way in.
+            before_send=before_send,
         )
     except Exception:
         # Deliberately broad. The alternatives are worse: catching only

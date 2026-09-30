@@ -40,7 +40,7 @@ import pytest
 import sentry_sdk
 
 from app.core.config import Settings
-from app.core.observability import dsn_host, init_sentry
+from app.core.observability import before_send, dsn_host, init_sentry
 
 #: Shaped like a real DSN so any validation inside the SDK would pass. The key is
 #: fake and the host does not resolve - nothing is ever sent.
@@ -213,3 +213,89 @@ def test_dsn_host_survives_garbage() -> None:
     """It is called on a startup path; it must not be the thing that crashes."""
     assert dsn_host("not-a-dsn") == "unknown"
     assert dsn_host("") == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# before_send: credentials must not leave the process
+# ---------------------------------------------------------------------------
+
+
+def test_before_send_redacts_an_authorization_header() -> None:
+    """The FastAPI integration attaches the request, and the request carries a
+    live bearer token. That token must not reach a third party."""
+
+    event = {
+        "request": {
+            "url": "/api/v1/admin/users",
+            "headers": {"Authorization": "Bearer token123", "User-Agent": "pytest"},
+        }
+    }
+
+    result = before_send(event, {})
+
+    assert result is not None
+    assert result["request"]["headers"]["Authorization"] == "[REDACTED]"
+    # The value must be gone, not merely labelled.
+    assert "token123" not in str(result)
+    # A non-sensitive header is evidence the scrubber is a filter, not a blanket.
+    assert result["request"]["headers"]["User-Agent"] == "pytest"
+
+
+def test_before_send_matches_header_names_case_insensitively() -> None:
+    """HTTP header names are not case sensitive, so neither is the match."""
+
+    event = {"request": {"headers": {"AUTHORIZATION": "Bearer t", "Cookie": "s=1"}}}
+
+    result = before_send(event, {})
+
+    assert result is not None
+    assert result["request"]["headers"] == {"AUTHORIZATION": "[REDACTED]", "Cookie": "[REDACTED]"}
+
+
+def test_before_send_handles_the_pair_list_shape() -> None:
+    """Sentry sends headers as a dict in some versions and as (name, value)
+    pairs in others. Handling only one shape would silently miss the other."""
+
+    event = {"request": {"headers": [["Authorization", "Bearer t"], ["Accept", "*/*"]]}}
+
+    result = before_send(event, {})
+
+    assert result is not None
+    assert result["request"]["headers"] == [
+        ["Authorization", "[REDACTED]"],
+        ["Accept", "*/*"],
+    ]
+
+
+def test_before_send_redacts_a_webhook_signature() -> None:
+    """A captured HMAC plus a known body is enough to forge a replay, which is
+    precisely what the fail-closed webhook design exists to prevent."""
+
+    event = {"request": {"headers": {"X-Razorpay-Signature": "deadbeef"}}}
+
+    result = before_send(event, {})
+
+    assert result is not None
+    assert result["request"]["headers"]["X-Razorpay-Signature"] == "[REDACTED]"
+
+
+def test_before_send_survives_its_own_failure(caplog) -> None:
+    """A scrubber that can raise is a scrubber that can lose the exact errors it
+    exists to protect. It must return the event, and say so."""
+
+    class Exploding(dict):
+        def get(self, *args: object) -> object:
+            raise RuntimeError("scrubber exploded")
+
+    event = Exploding()
+
+    result = before_send(event, {})
+
+    assert result is event, "the original event must be returned, never dropped"
+    assert "UNSANITISED" in caplog.text
+
+
+def test_before_send_leaves_an_event_without_headers_alone() -> None:
+    event = {"message": "ValueError: boom", "level": "error"}
+
+    assert before_send(event, {}) == event

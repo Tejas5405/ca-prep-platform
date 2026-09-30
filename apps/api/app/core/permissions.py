@@ -217,6 +217,15 @@ def require_permission(*required: Permission):
             raise PermissionDenied(",".join(missing))
         return user
 
+    # Tag the closure so it is RECOGNISABLE on a route.
+    #
+    # `require_permission` returns a fresh inner function each call, so two
+    # routes calling it with different permissions get two different objects and
+    # neither compares equal to anything. That makes "is this route gated?"
+    # unanswerable by inspection - which is why the property was held by code
+    # review until `tests/integration/test_admin_route_security.py` needed to
+    # assert it. The attribute is the minimum that makes the question askable.
+    _dependency.__caprep_permission_gate__ = tuple(required)  # type: ignore[attr-defined]
     return _dependency
 
 
