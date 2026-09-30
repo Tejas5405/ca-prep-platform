@@ -4491,6 +4491,24 @@
               "title": "Limit",
               "type": "integer"
             }
+          },
+          {
+            "description": "Opaque keyset position from a previous page's meta.nextCursor. Supplying it switches to cursor pagination, which is stable under concurrent inserts - offset pagination can repeat and skip rows on an audit log, which is read precisely because something is wrong.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque keyset position from a previous page's meta.nextCursor. Supplying it switches to cursor pagination, which is stable under concurrent inserts - offset pagination can repeat and skip rows on an audit log, which is read precisely because something is wrong.",
+              "title": "Cursor"
+            }
           }
         ],
         "responses": {

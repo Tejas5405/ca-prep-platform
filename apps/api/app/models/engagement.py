@@ -31,6 +31,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    text,
 )
 from sqlalchemy import (
     text as sa_text,
@@ -167,6 +168,12 @@ class AnalyticsEvent(Base, UuidMixin, TimestampMixin):
     properties: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
 
     __table_args__ = (
+        # Keyset pagination: the composite the tuple comparison
+        # `(created_at, id) < (t, i)` is a range scan over. See migration
+        # 0017. Declared here as well as in the migration so autogenerate does
+        # not propose dropping it - an index that exists only in the database is
+        # invisible to `alembic check`.
+        Index("idx_analytics_events_created_id_desc", text("created_at DESC"), text("id DESC")),
         Index("idx_analytics_name_time", "name", "created_at"),
         Index("idx_analytics_user_time", "user_id", "created_at"),
     )
@@ -203,6 +210,12 @@ class AuditLog(Base, UuidMixin, TimestampMixin):
     ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     __table_args__ = (
+        # Keyset pagination: the composite the tuple comparison
+        # `(created_at, id) < (t, i)` is a range scan over. See migration
+        # 0017. Declared here as well as in the migration so autogenerate does
+        # not propose dropping it - an index that exists only in the database is
+        # invisible to `alembic check`.
+        Index("idx_audit_logs_created_id_desc", text("created_at DESC"), text("id DESC")),
         Index("idx_audit_time", "created_at"),
         Index("idx_audit_actor", "actor_user_id", "created_at"),
         Index("idx_audit_action", "action", "created_at"),

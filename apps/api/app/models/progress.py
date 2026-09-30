@@ -37,6 +37,7 @@ from sqlalchemy import (
     Numeric,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy import (
     text as sa_text,
@@ -78,6 +79,12 @@ class PracticeAttempt(Base, UuidMixin, TimestampMixin):
     question_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     __table_args__ = (
+        # Keyset pagination: the composite the tuple comparison
+        # `(created_at, id) < (t, i)` is a range scan over. See migration
+        # 0017. Declared here as well as in the migration so autogenerate does
+        # not propose dropping it - an index that exists only in the database is
+        # invisible to `alembic check`.
+        Index("idx_practice_attempts_created_id_desc", text("created_at DESC"), text("id DESC")),
         CheckConstraint("time_spent_seconds >= 0", name="ck_practice_time_non_negative"),
         # Matches §9.3 idx_progress_user(user_id, question_id) for the
         # "have I done this question" lookup.

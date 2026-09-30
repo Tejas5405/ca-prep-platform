@@ -19,15 +19,17 @@ especially when the permission being revoked gates deleting the entire library.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_db, get_request_id
 from app.core.envelope import paginated, success
+from app.core.pagination import InvalidCursor, paginate_cursor
 from app.core.permissions import (
     Permission,
     require_permission,
@@ -154,6 +156,15 @@ async def audit_log(
     target_type: str | None = Query(default=None, max_length=40),
     page: int = Query(default=1, ge=1),
     limit: int = Query(default=50, ge=1, le=200),
+    cursor: str | None = Query(
+        default=None,
+        description=(
+            "Opaque keyset position from a previous page's meta.nextCursor. Supplying "
+            "it switches to cursor pagination, which is stable under concurrent "
+            "inserts - offset pagination can repeat and skip rows on an audit log, "
+            "which is read precisely because something is wrong."
+        ),
+    ),
     session: AsyncSession = Depends(get_db),
     _actor: User = Depends(require_permission(Permission.VIEW_AUDIT)),
 ) -> Any:
@@ -167,35 +178,80 @@ async def audit_log(
         conditions.append(AuditLog.target_type == target_type)
 
     base = select(AuditLog).where(*conditions) if conditions else select(AuditLog)
-    total = (await session.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
-    rows = (
-        (
-            await session.execute(
-                base.order_by(AuditLog.created_at.desc()).limit(limit).offset((page - 1) * limit)
+    rows: Sequence[AuditLog]
+
+    # Keyset is the DEFAULT for this route, including the first page.
+    #
+    # The first attempt at this only ran keyset when `cursor` was supplied - which
+    # is a dead end, because a client cannot obtain a cursor without first
+    # receiving one. The first page therefore has to be able to EMIT a cursor, so
+    # it runs keyset too. `page` is kept for the legacy offset walk and is
+    # honoured only when the caller actually asks for page > 1.
+    if cursor or page <= 1:
+        # Keyset path. No COUNT(*): the whole reason to page by cursor is that
+        # counting an append-only log on every request is the cost being avoided.
+        # `data` stays a list and the cursor facts go in `meta`, so this is the
+        # SAME envelope as the offset path - a client does not have to detect
+        # which kind of response it received.
+        try:
+            rows, next_cursor, has_more = await paginate_cursor(
+                session, AuditLog, query=base, cursor=cursor, limit=limit
             )
+        except InvalidCursor as exc:
+            # A bad cursor is the CLIENT's problem, and must not surface as a
+            # 500: that sends an operator to the server logs for a mistyped query
+            # parameter, and tells the client the server is broken.
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        total: int | None = None
+        page_number = 1
+        extra = {"nextCursor": next_cursor} if next_cursor else None
+    else:
+        total = (
+            await session.execute(select(func.count()).select_from(base.subquery()))
+        ).scalar_one()
+        rows = (
+            (
+                await session.execute(
+                    base.order_by(AuditLog.created_at.desc())
+                    .limit(limit)
+                    .offset((page - 1) * limit)
+                )
+            )
+            .scalars()
+            .all()
         )
-        .scalars()
-        .all()
-    )
-    return paginated(
-        [
-            {
-                "id": str(row.id),
-                "action": row.action,
-                "summary": row.summary,
-                "actorEmail": row.actor_email,
-                "actorRole": row.actor_role,
-                "actorUserId": str(row.actor_user_id) if row.actor_user_id else None,
-                "targetType": row.target_type,
-                "targetId": row.target_id,
-                "changes": row.changes,
-                "ipAddress": row.ip_address,
-                "createdAt": row.created_at,
-            }
-            for row in rows
-        ],
-        total=int(total),
-        page=page,
+        next_cursor = None
+        has_more = False
+        page_number = page
+        extra = None
+
+    payload = [
+        {
+            "id": str(row.id),
+            "action": row.action,
+            "summary": row.summary,
+            "actorEmail": row.actor_email,
+            "actorRole": row.actor_role,
+            "actorUserId": str(row.actor_user_id) if row.actor_user_id else None,
+            "targetType": row.target_type,
+            "targetId": row.target_id,
+            "changes": row.changes,
+            "ipAddress": row.ip_address,
+            "createdAt": row.created_at,
+        }
+        for row in rows
+    ]
+    # `total` is deliberately absent on the cursor path: it is None there, so the
+    # count is not claimed rather than being reported as a misleading 0. A client
+    # walking with a cursor does not need a total; a client that wants one omits
+    # the cursor and gets the offset path, which counts.
+    envelope = paginated(
+        payload,
+        total=int(total or 0),
+        page=page_number,
         limit=limit,
         request_id=get_request_id(),
+        extra=extra,
     )
+    envelope["meta"]["hasMore"] = has_more
+    return envelope
