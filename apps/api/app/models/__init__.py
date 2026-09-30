@@ -48,6 +48,7 @@ from app.models.engagement import (
 )
 from app.models.enums import SyllabusScheme
 from app.models.ingestion import IngestionDraft, IngestionJob, RawExtraction
+from app.models.planner import StudyPlan, StudyPlanItem
 from app.models.progress import (
     DailyActivity,
     MockAttempt,
@@ -126,6 +127,8 @@ __all__ = [
     "SpacedRepetitionCard",
     "StudyGroup",
     "StudyGroupMember",
+    "StudyPlan",
+    "StudyPlanItem",
     "Subject",
     "SubjectComponent",
     "Subscription",

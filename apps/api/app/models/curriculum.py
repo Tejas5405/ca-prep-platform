@@ -68,7 +68,12 @@ class Course(Base, UuidMixin, TimestampMixin):
 
     __table_args__ = (
         UniqueConstraint("code", "syllabus_scheme", name="uq_course_code_scheme"),
-        CheckConstraint("level IN ('FOUNDATION','INTERMEDIATE','FINAL')", name="ck_course_level"),
+        # 'SET' is the self-paced module level (SET A-D). Kept in step with
+        # ck_course_level in migration 0014_widen_course_level_set: a model that
+        # allows a value the database rejects fails on write, not on review.
+        CheckConstraint(
+            "level IN ('FOUNDATION','INTERMEDIATE','FINAL','SET')", name="ck_course_level"
+        ),
         CheckConstraint(
             "syllabus_scheme IN ('OLD_2016','NEW_2024','UNMAPPED')",
             name="ck_course_scheme",

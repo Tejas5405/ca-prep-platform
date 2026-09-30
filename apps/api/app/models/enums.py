@@ -69,6 +69,9 @@ class CourseLevel(StrEnum):
     FOUNDATION = "FOUNDATION"
     INTERMEDIATE = "INTERMEDIATE"
     FINAL = "FINAL"
+    # Self-Paced Online Module, shipped as SET A-D. Added with migration
+    # 0014_widen_course_level_set; keep this enum and ck_course_level in step.
+    SET = "SET"
 
 
 class SyllabusScheme(StrEnum):

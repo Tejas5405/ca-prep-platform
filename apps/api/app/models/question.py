@@ -54,7 +54,7 @@ from sqlalchemy import (
 from sqlalchemy import (
     text as sa_text,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, SoftDeleteMixin, TimestampMixin, UuidMixin
@@ -197,6 +197,22 @@ class Question(Base, UuidMixin, TimestampMixin, SoftDeleteMixin):
         default=SyllabusScheme.UNMAPPED.value,
         server_default=sa_text("'UNMAPPED'"),
     )
+    # Which exam attempts this question is applicable to, e.g. ['May 2027'].
+    #
+    # An ARRAY rather than a child table because the only question asked of it
+    # is containment (`applicable_attempts @> ARRAY[:attempt]`), which the GIN
+    # index idx_questions_applicable_attempts answers directly. Without that index
+    # the filter meant to NARROW the bank widens into a full scan - so the index
+    # is part of the column, not an optimisation to add later.
+    #
+    # Added by migration 0016_applicable_attempts. It defaults to an empty array,
+    # so every existing row is already valid and no backfill was required.
+    applicable_attempts: Mapped[list[str]] = mapped_column(
+        ARRAY(Text),
+        nullable=False,
+        default=list,
+        server_default="{}",
+    )
     is_premium: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=sa_text("false")
     )
@@ -221,6 +237,15 @@ class Question(Base, UuidMixin, TimestampMixin, SoftDeleteMixin):
     )
 
     __table_args__ = (
+        # GIN, declared in the model and not only in the migration: an index that
+        # exists in the database but not in the ORM is invisible to autogenerate,
+        # so the next `alembic revision --autogenerate` emits a migration that
+        # DROPS it. Verified with `alembic check`.
+        Index(
+            "idx_questions_applicable_attempts",
+            "applicable_attempts",
+            postgresql_using="gin",
+        ),
         CheckConstraint(
             "question_type IN ('MCQ','MSQ','TRUE_FALSE','NUMERICAL','DESCRIPTIVE','CASE_STUDY')",
             name="ck_questions_type",

@@ -55,11 +55,14 @@ services:
         fromDatabase:
           name: caprep-postgres
           property: connectionString
+      # NOT fromService. A Render Key Value instance exposes `host` and `port`
+      # as separate properties and has no combined `connectionString`, and this
+      # app takes a single REDIS_URL (app/core/dependencies.py). It therefore
+      # cannot be composed in the blueprint, so it is pasted from the Key Value
+      # dashboard instead. Copy the URI shown there; it looks like
+      # redis://:<password>@<host>:6379. Changing it means re-pasting it here.
       - key: REDIS_URL
-        fromService:
-          name: caprep-redis
-          type: redis
-          property: connectionString
+        sync: false
       # SUPABASE_URL is the value that makes issuer and audience verification
       # meaningful: a token minted for another Supabase project is signed by that
       # project's key, and the API checks `iss` against this URL, so a foreign token
@@ -176,11 +179,14 @@ services:
         fromDatabase:
           name: caprep-postgres
           property: connectionString
+      # NOT fromService. A Render Key Value instance exposes `host` and `port`
+      # as separate properties and has no combined `connectionString`, and this
+      # app takes a single REDIS_URL (app/core/dependencies.py). It therefore
+      # cannot be composed in the blueprint, so it is pasted from the Key Value
+      # dashboard instead. Copy the URI shown there; it looks like
+      # redis://:<password>@<host>:6379. Changing it means re-pasting it here.
       - key: REDIS_URL
-        fromService:
-          name: caprep-redis
-          type: redis
-          property: connectionString
+        sync: false
       # The worker authenticates to storage with the same secret key as the API.
       # It never verifies a user token, but it does download the PDF it is asked to
       # process, so it needs storage access of its own.
@@ -193,6 +199,35 @@ services:
       # OCR runs on this service, so the system Tesseract binary and Poppler
       # (for pdf2image) must be present in the image. See apps/api/Dockerfile.
 
+  # ------------------------------------------------------------ key value ---
+  # REQUIRED - DO NOT DELETE.
+  #
+  # Render Key Value is declared under `services:`, not `databases:`; only
+  # Render Postgres belongs under `databases`. `type: redis` still parses but is
+  # a deprecated alias for `type: keyvalue`, so this uses the current name.
+  #
+  # Redis is not a cache here, it is a CORRECTNESS dependency:
+  #   * rate limiting counts in Redis, so without it every request is either
+  #     uncounted or fail-closed with a 503 - both outages, not degradation;
+  #   * the Razorpay webhook's replay protection fails CLOSED on Redis. That is
+  #     deliberate: an uncounted webhook can be replayed, and a replayed capture
+  #     activates a subscription that was never paid for.
+  #
+  # maxmemoryPolicy: noeviction is part of that guarantee, not a tuning choice.
+  # Under the default allkeys-lru the limiter can evict a counter, and a counter
+  # that vanished reads as "this client has made no requests yet" - a free reset
+  # of every limit, on demand, whenever memory fills.
+  #
+  # ipAllowList: [] means INTERNAL connections only. The limiter and the worker
+  # both reach this over Render's private network; nothing here needs it exposed
+  # to the public internet, and an open Redis is a rate-limit bypass.
+  - type: keyvalue
+    name: caprep-redis
+    plan: starter
+    region: singapore
+    maxmemoryPolicy: noeviction
+    ipAllowList: []
+
 databases:
   - name: caprep-postgres
     plan: basic-256mb
@@ -201,13 +236,3 @@ databases:
     # Render takes daily snapshots. Verify the retention window against the
     # blueprint's backup requirement before go-live, and TEST A RESTORE -
     # an untested backup is not a backup.
-
-  # ----------------------------------------------------------------- redis ---
-  # Declared here for completeness; create it in the dashboard or uncomment if
-  # your Render plan supports Redis in Blueprints.
-  #
-  # - name: caprep-redis
-  #   type: redis
-  #   plan: starter
-  #   region: singapore
-  #   maxmemoryPolicy: noeviction

@@ -50,7 +50,7 @@ from sqlalchemy import (
 from sqlalchemy import (
     text as sa_text,
 )
-from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TSVECTOR, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, SoftDeleteMixin, TimestampMixin, UuidMixin
@@ -147,6 +147,22 @@ class ContentDocument(Base, UuidMixin, TimestampMixin, SoftDeleteMixin):
     access_tier: Mapped[str] = mapped_column(
         String(20), nullable=False, server_default=sa_text("'PREMIUM'")
     )
+    # Which exam attempts this document is applicable to, e.g. ['May 2027'].
+    #
+    # An ARRAY rather than a child table because the only question asked of it
+    # is containment (`applicable_attempts @> ARRAY[:attempt]`), which the GIN
+    # index idx_content_documents_applicable_attempts answers directly. Without that index
+    # the filter meant to NARROW the bank widens into a full scan - so the index
+    # is part of the column, not an optimisation to add later.
+    #
+    # Added by migration 0016_applicable_attempts. It defaults to an empty array,
+    # so every existing row is already valid and no backfill was required.
+    applicable_attempts: Mapped[list[str]] = mapped_column(
+        ARRAY(Text),
+        nullable=False,
+        default=list,
+        server_default="{}",
+    )
     is_published: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=sa_text("false")
     )
@@ -166,6 +182,15 @@ class ContentDocument(Base, UuidMixin, TimestampMixin, SoftDeleteMixin):
     batch_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
 
     __table_args__ = (
+        # GIN, declared in the model and not only in the migration: an index that
+        # exists in the database but not in the ORM is invisible to autogenerate,
+        # so the next `alembic revision --autogenerate` emits a migration that
+        # DROPS it. Verified with `alembic check`.
+        Index(
+            "idx_content_documents_applicable_attempts",
+            "applicable_attempts",
+            postgresql_using="gin",
+        ),
         CheckConstraint(
             f"kind IN ({sql_in_list(DocumentKind)})",
             name="ck_document_kind",

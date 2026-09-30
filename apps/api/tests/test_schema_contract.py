@@ -523,7 +523,16 @@ class TestSchemaSize:
         #     which had no table before and therefore recorded nothing
         #   audit_logs, platform_settings                             -> the owner's
         #     trail of who changed what, and the switches that need no deploy
-        assert len(Base.metadata.sorted_tables) == 57
+        # 59 after the study planner (migration 0015): study_plans and
+        # study_plan_items - a dated plan per student per target attempt, and
+        # the scheduled chapters inside it. Two tables rather than one, because
+        # "what is due this week" is an indexed lookup on rows, not a scan of
+        # one wide JSONB document.
+        # 58 was the planner's single-table draft, which could not answer that
+        # question without reading every item to find the dated ones.
+        # applicable_attempts (migration 0016) adds COLUMNS to questions and
+        # content_documents, not tables, so it does not move this number.
+        assert len(Base.metadata.sorted_tables) == 59
 
     def test_a_grant_has_exactly_one_audience_selector(self):
         """The CHECK constraint that stops a grant from meaning two things.
