@@ -331,6 +331,36 @@ Firebase is removed from the codebase: no SDK in `package.json`, no
 `firebase.ts`, no `FIREBASE_*` environment variable anywhere, and
 `test_infra_contract.py` now has no Firebase references at all.
 
+### What this amendment does NOT change: who authorizes
+
+SA-09 is about the **identity provider** — who holds credentials and who signs the
+token. It says nothing about **authorization**, and the two are easy to conflate
+because both are "role" in casual speech.
+
+**The role claim is not the authority.** The table above lists where the claim lives
+(`app_metadata.role`) because that is where the token's copy of the role lives. The
+API does not read it to decide access:
+
+| Question | Answered from | Not from |
+|---|---|---|
+| Who is this? (`sub` → user) | the verified JWT | anything else — never a header, query or body |
+| What role do they have? | `users.role` in Postgres | the token claim |
+| What may they do? | `ROLE_PERMISSIONS`, via `require_permission` | a role-name comparison |
+
+`resolve_role()` reads the row that `get_current_user()` already loaded, and falls
+back to `STUDENT`. A role change therefore takes effect on the **next request**
+rather than when the user's hour-long token expires — which is the entire reason
+the claim is treated as advisory.
+
+Supabase Auth therefore owns *credentials and signatures* in this architecture, and
+nothing else. The claim is still written on a role change
+(`SupabaseAuthAdmin.set_role_claim`) so that the Supabase-side row and the client's
+token converge, but that write is best-effort and non-blocking: a failure is a
+delay, not an outage, and it cannot grant access that the row does not.
+
+Full diagram and rationale: [README → Authentication and authorization](../../README.md#authentication-and-authorization).
+→ `app/core/permissions.py`, `app/integrations/supabase_auth.py`
+
 ### Reason
 
 **One vendor, not two.** SA-05 introduced Firebase for identity while leaving the

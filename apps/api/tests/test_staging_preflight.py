@@ -177,22 +177,35 @@ class TestTheGateRefusesBeforeConnecting:
     ) -> None:
         """A pydantic error must not be printed raw: it echoes the input value.
 
-        An ambient `DEBUG=release` in the shell is enough to trigger this, and if
-        the mistyped field were a secret, printing the message verbatim would
-        publish it.
+        An unparseable field is enough to trigger this, and if the mistyped field
+        were a secret, printing the message verbatim would publish it.
+
+        THE FIXTURE MOVED OFF `debug` IN PHASE 2, AND THAT IS THE POINT. This
+        test used ``DEBUG=release``, chosen precisely because ``debug: bool``
+        rejected it. Phase 2 added ``coerce_debug``, which accepts *any* string
+        for ``debug`` so that an ambient ``DEBUG=release`` can no longer stop the
+        app booting - so ``debug`` stopped being a usable example of a field that
+        raises, and the assertion below silently stopped testing anything.
+
+        A test that quietly stops testing is worse than a failing one, so the
+        fixture moved to ``RATE_LIMIT_PER_MINUTE=abc``: an int field that still
+        refuses to parse, and - unlike ``environment`` - one that has no bearing
+        on which env file is read, so this still exercises the failure it was
+        written for rather than a different code path.
         """
         (tmp_path / ".env.staging").write_text(
-            f"SUPABASE_URL=https://{STAGING_REF}.supabase.co\nDEBUG=release\n"
+            f"SUPABASE_URL=https://{STAGING_REF}.supabase.co\nRATE_LIMIT_PER_MINUTE=abc\n"
         )
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setenv("DEBUG", "release")  # a real variable outranks the file
+        # a real variable outranks the file
+        monkeypatch.setenv("RATE_LIMIT_PER_MINUTE", "abc")
         monkeypatch.setattr(
             pf, "read_current_database", lambda url: pytest.fail("opened a connection!")
         )
         assert run_main("--forbid-ref", DEV_REF) == 2
         out = capsys.readouterr().out
-        assert "release" not in out, "the offending value was echoed to stdout"
-        assert "debug" in out, "the failing field should still be named"
+        assert "abc" not in out, "the offending value was echoed to stdout"
+        assert "rate_limit_per_minute" in out, "the failing field should still be named"
 
 
 class TestItFallsBackWhenTheDirectHostIsUnroutable:

@@ -100,8 +100,13 @@ def test_a_queue_outage_is_reported_and_not_raised_at_the_route() -> None:
     import re
 
     source = pathlib.Path(rq_worker.__file__).resolve()
-    content = source.parents[1] / "api" / "v1" / "content.py"
-    text = content.read_text()
+    # PHASE 5. content.py is now a package. The two guarded `enqueue_ingestion`
+    # call sites - upload processing and reprocess - live in `content/uploads.py`
+    # and `content/documents.py`, so both are scanned. The assertions are
+    # unchanged: every call site must still sit inside a `try:`.
+    content_dir = source.parents[1] / "api" / "v1" / "content"
+    sources = sorted(content_dir.glob("*.py"))
+    text = "\n".join(p.read_text() for p in sources)
 
     # Every enqueue call site sits inside a try block whose except turns it into
     # `enqueued: false`.

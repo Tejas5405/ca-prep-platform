@@ -96,6 +96,22 @@ jobs:
       - name: Format check (ruff format)
         run: ruff format --check .
 
+      - name: mypy ratchet
+        # Deliberately NOT `mypy app/`. The codebase has a recorded baseline of
+        # errors, and a gate demanding zero would be red on every push - a
+        # permanently red gate is a gate nobody runs. This fails only when the
+        # count goes ABOVE the baseline, so a change that adds type errors is
+        # caught in review instead of three months later.
+        #
+        # The threshold lives in scripts/mypy_ratchet.sh and is LOWERED whenever
+        # the real count drops. It started at 37, went to 36 when deleting the
+        # dead require_role() removed its own missing-return-annotation error, and
+        # to 35 when the Phase 4 SupabaseAuthAdmin(settings) fix removed the
+        # call-arg error. The ratchet only ever tightens.
+        #
+        # mypy comes from requirements-dev.txt (mypy==1.19.0), installed above.
+        run: bash ../../scripts/mypy_ratchet.sh app/
+
       - name: Apply migrations
         # Proves the migration chain runs from empty, which a "models import
         # fine" check does not.

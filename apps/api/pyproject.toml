@@ -73,11 +73,13 @@ extend-immutable-calls = [
     "fastapi.Query",
     "fastapi.Header",
     "fastapi.Path",
-    "app.core.security.require_role",
-    # Same shape as require_role: a dependency FACTORY whose call happens once at
-    # import time, not per request. Ruff cannot tell the two apart, and the
-    # alternative - a module-level singleton per route - is how a route ends up
-    # sharing a closure with a different permission.
+    # require_role used to be listed here. It was a dependency FACTORY whose
+    # call happens once at import time, not per request, and ruff cannot tell
+    # that apart from a per-request call - hence the exemption. The function was
+    # removed as dead code: every route asks for a PERMISSION (below), never a
+    # role name, so nothing constructed it.
+    #
+    # The exemption for the surviving factory is unchanged and still needed.
     "app.core.permissions.require_permission",
 ]
 

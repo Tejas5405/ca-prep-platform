@@ -78,15 +78,24 @@ class FakeStorage:
 @contextlib.contextmanager
 def fake_storage(**kwargs: Any):
     """Point the content routes at a stand-in and put the real factory back afterwards."""
-    import app.api.v1.content as content_module
+    import app.api.v1.content.documents as content_documents
+    import app.api.v1.content.library as content_library
+    import app.api.v1.content.uploads as content_uploads
     from app.integrations.supabase_storage import storage_from_settings
 
     stand_in = FakeStorage(**kwargs)
-    content_module.storage_from_settings = lambda *a, **k: stand_in
+    # PHASE 5. app/api/v1/content.py is now a package and each sub-module holds
+    # its own binding of `storage_from_settings`, so patching the package no
+    # longer intercepts it. Patch every sub-module that binds one; the stand-in
+    # and the restore afterwards are unchanged.
+    patched = (content_library, content_uploads, content_documents)
+    for _mod in patched:
+        _mod.storage_from_settings = lambda *a, **k: stand_in
     try:
         yield stand_in
     finally:
-        content_module.storage_from_settings = storage_from_settings
+        for _mod in patched:
+            _mod.storage_from_settings = storage_from_settings
 
 
 async def with_curriculum(session: Any) -> dict[str, Any]:
@@ -1748,13 +1757,18 @@ def test_a_storage_outage_is_a_503_and_not_a_500(database_url: str) -> None:
         )
         await session.commit()
 
-        import app.api.v1.content as content_module
+        import app.api.v1.content.documents as content_documents
+        import app.api.v1.content.library as content_library
 
         stand_in = DeadStorage()
         # The routes resolve the factory from their own module namespace, so the patch
-        # goes there - the same seam the existing fake_storage helper uses.
-        original = content_module.storage_from_settings
-        content_module.storage_from_settings = lambda *a, **k: stand_in  # type: ignore[assignment]
+        # goes there - the same seam the existing fake_storage helper uses. Since the
+        # Phase 5 split, "their own module namespace" is one module per sub-module:
+        # the download route lives in documents, the library file route in library.
+        patched = (content_documents, content_library)
+        originals = [_mod.storage_from_settings for _mod in patched]
+        for _mod in patched:
+            _mod.storage_from_settings = lambda *a, **k: stand_in  # type: ignore[assignment]
         try:
             async with Actor(session, admin) as client:
                 download = await client.get(
@@ -1770,7 +1784,8 @@ def test_a_storage_outage_is_a_503_and_not_a_500(database_url: str) -> None:
                 "file_body": file_link.json(),
             }
         finally:
-            content_module.storage_from_settings = original
+            for _mod, _original in zip(patched, originals, strict=True):
+                _mod.storage_from_settings = _original
 
     result = run_in_database(database_url, body)
     assert result["admin_download"] == 503, result["admin_body"]

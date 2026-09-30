@@ -331,9 +331,14 @@ def main() -> int:
         # the field names and the expected types are safe, and they are enough to
         # fix the file.
         #
-        # This is not hypothetical: an ambient `DEBUG=release` in the shell - a
-        # Django-ism that has no meaning here - is enough to land here, because a
-        # real environment variable outranks the file.
+        # This is not hypothetical: an unparseable value in the shell - a
+        # Django-ism like DEBUG=release that has no meaning here, or a numeric
+        # limit set to a word - is enough to land here, because a real
+        # environment variable outranks the file. (`debug` itself is now
+        # immune: Phase 2 added a validator that coerces it rather than
+        # rejecting it, precisely so a stray DEBUG could not stop the app
+        # booting. An int field like RATE_LIMIT_PER_MINUTE still raises, and is
+        # what the covering test uses.)
         fields = ", ".join(
             f"{'.'.join(str(p) for p in err['loc'])} (expected {err['type']})"
             for err in exc.errors()

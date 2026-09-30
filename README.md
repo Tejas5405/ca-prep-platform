@@ -25,7 +25,7 @@ choices into this codebase.
 | Backend | FastAPI + Pydantic v2 + SQLAlchemy 2.0 + Alembic → Render |
 | Database | PostgreSQL — Supabase Postgres in every environment (system of record) |
 | Cache / queues | Redis + RQ |
-| Auth | **Supabase Auth** — access tokens verified against the project JWKS |
+| Auth | **Hybrid** — Supabase Auth issues the token; this API authorizes against Postgres. See [Authentication and authorization](#authentication-and-authorization) |
 | File storage | Supabase Storage (private buckets, backend-brokered signed URLs) |
 | PDF / OCR | PyMuPDF → pdfplumber → pdf2image + Tesseract |
 | Payments / email / analytics | Razorpay · Resend · PostHog · Sentry (optional) |
@@ -44,6 +44,90 @@ signing key, one dashboard, and no cross-vendor JWT exchange. See
 [`docs/architecture/stack-amendments.md`](docs/architecture/stack-amendments.md)
 (SA-09; SA-05 superseded, SA-08 amended) for the reasons, what changed for storage
 access, and the cost — Supabase is now a single point of failure for sign-in.
+
+---
+
+## Authentication and authorization
+
+These are two different jobs, done by two different systems, and conflating them is
+the most common misreading of this codebase.
+
+```
+  Browser
+    │  email/password or Google  ──────────────┐
+    ▼                                         │
+  Supabase Auth  ◄────────────────────────────┘
+    │  issues an access token (ES256)
+    │  containing: sub, email, role claim
+    ▼
+  ─────────────────── request boundary ───────────────────
+  FastAPI
+    │  1. VERIFY the token against the project JWKS
+    │     app/core/security.py → SupabaseTokenVerifier
+    │     algorithm pinned (no `none`, no HS256), audience checked
+    │     the `sub` claim identifies the user — nothing else does
+    │
+    │  2. RESOLVE the role from Postgres, not from the token
+    │     app/core/permissions.py → resolve_role()
+    │     reads users.role on the row get_current_user() already loaded
+    │
+    │  3. AUTHORIZE with require_permission(...)
+    │     app/core/permissions.py → the ROLE_PERMISSIONS matrix
+    ▼
+  route handler
+```
+
+**What Supabase does.** It is the identity provider: it holds credentials, runs
+email/password and Google sign-in, and mints the access token. It also serves the
+public JWKS the API verifies against, so no signing secret exists anywhere in this
+deployment. `app/integrations/supabase_auth.py` (`SupabaseAuthAdmin`) is the one
+outbound call this platform makes to it — see below.
+
+**What this API does.** It authorizes. The token says *who*; the `users` table says
+*what they may do*.
+
+| Concern | Read from | Why |
+|---|---|---|
+| Identity (`sub` → user) | verified JWT claim | The only accepted source. Never a query string, body, or custom header. |
+| Role (`STUDENT`…`SUPER_ADMIN`) | `users.role` in Postgres | Fresh. See below. |
+| Capability (`MANAGE_CONTENT`, `VIEW_USERS`, …) | `ROLE_PERMISSIONS` matrix, checked by `require_permission` | Rank cannot express "payments but not users". |
+
+**Why the role is read from the database and not the token claim.** A token is
+minted at sign-in and lives about an hour. Reading the role from the claim means
+revoking someone's admin rights does not take effect until their existing token
+expires — and for a permission that gates deleting 500 PDFs, an hour of stale
+authority is not acceptable. Reading `users.role` means a role change takes effect
+on the **next request**. `resolve_role()` falls back to `STUDENT` when the column
+is unset.
+
+**Why a permission matrix rather than a role ladder.** A ladder answers "is this
+caller at least this senior?", which cannot express "an accountant who may see
+payments and nothing else". `require_permission(*required)` requires **all** listed
+permissions, not any — the two spellings look alike and only one is safe, so the
+distinction is enforced in the factory rather than left to review.
+
+**The role claim still exists — it is not the authority.** When an admin changes a
+user's role, the API writes the Postgres row first and then makes a best-effort
+`set_role_claim()` call to Supabase so the Supabase-side row and the client's token
+eventually agree. That call is deliberately *not* load-bearing:
+
+- It is best-effort by design. The row is already committed, and authorization
+  reads the row, so a failed claim write is a **delay, not an outage**.
+- The two systems cannot be made atomic. The honest outcome is "the row changed, the
+  claim did not" — reported as `claimUpdated` on the response — rather than
+  rolling back a correct authorization decision because a token is stale.
+- Because nothing authorizes off the claim, a stale claim cannot grant access. It
+  can only make a client *display* the wrong role until the next sign-in.
+
+**One boundary, deliberately.** Supabase Storage's row-level-security policies
+evaluate `auth.uid()` from a Supabase Auth JWT. This platform does not use RLS as
+its access-control mechanism: file access is brokered by the API through
+short-lived signed URLs, so there is exactly one place to audit rather than two,
+and the browser never holds a secret key. See SA-08/SA-09 in
+[`docs/architecture/stack-amendments.md`](docs/architecture/stack-amendments.md).
+
+→ `app/core/security.py`, `app/core/permissions.py`,
+`app/integrations/supabase_auth.py`
 
 ---
 

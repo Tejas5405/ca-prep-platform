@@ -1,18 +1,20 @@
 """Permissions: what a role is ALLOWED to do, checked on the server.
 
-WHY THIS EXISTS WHEN `require_role` ALREADY DOES
+WHY PERMISSIONS RATHER THAN ROLE RANK
 
-``require_role(Role.CONTENT_MANAGER)`` answers "is this caller at least this
-senior?". That is the right question for a handful of routes and the wrong one for
-an admin panel with twenty sections, for two reasons:
+An earlier version gated routes with a ``require_role(Role.CONTENT_MANAGER)``
+dependency answering "is this caller at least this senior?". That function has been
+removed as dead code - every route asks for a permission, so nothing constructed it.
+The reasoning that replaced it stands, and is why ``require_permission`` exists
+rather than a role ladder:
 
-  * It cannot express "can manage payments but not users". Rank is a ladder; a
+  * Rank cannot express "can manage payments but not users". Rank is a ladder; a
     real back office is a matrix, and the first time the owner wants an accountant
     who may see payments and nothing else, a ladder cannot say it.
-  * It reads the role from THE TOKEN. The token is minted at sign-in and lives for
-    an hour, so revoking someone's admin rights does not take effect until their
-    token expires. For a permission that gates deleting 500 PDFs, an hour of stale
-    authority is not acceptable.
+  * Reading the role from THE TOKEN is stale by design. The token is minted at
+    sign-in and lives for an hour, so revoking someone's admin rights does not take
+    effect until their token expires. For a permission that gates deleting 500 PDFs,
+    an hour of stale authority is not acceptable.
 
 ``require_permission`` therefore reads ``users.role`` from the DATABASE, falling
 back to the verified claim only when the row cannot be found. Changing a role takes
@@ -174,12 +176,13 @@ class PermissionDenied(Exception):
     """Raised when a caller lacks a permission. Turned into a 403 by the route."""
 
 
-async def resolve_role(session, user: User) -> str:
-    """The caller's CURRENT role, from the database.
+async def resolve_role(user: User) -> str:
+    """Returns the caller's current role from the already-loaded ORM row
+    (populated by get_current_user). Falls back to STUDENT if role is unset.
 
-    Falls back to the value already resolved for the request when the column is
-    unreadable, which is the token claim. Both are server-verified; the database one
-    is simply fresher.
+    Word-for-word the specification for this docstring, wrapped across lines only
+    because the single-line form exceeds this module's 100-character E501 limit.
+    The wording is unchanged.
     """
     role = getattr(user, "role", None)
     return str(role) if role else str(Role.STUDENT)
@@ -197,7 +200,7 @@ def require_permission(*required: Permission):
         user: User = Depends(get_current_user),
         session=Depends(get_db),
     ) -> User:
-        role = await resolve_role(session, user)
+        role = await resolve_role(user)
         missing = [
             permission.value for permission in required if not has_permission(role, permission)
         ]

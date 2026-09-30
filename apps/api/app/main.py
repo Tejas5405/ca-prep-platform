@@ -45,6 +45,7 @@ from app.api.v1 import (
 from app.core.config import get_settings
 from app.core.dependencies import close_clients, request_id_ctx
 from app.core.envelope import problem
+from app.core.observability import init_sentry
 from app.core.permissions import PermissionDenied, forbidden
 from app.core.rate_limit import RateLimitMiddleware
 from app.integrations.supabase_storage import StorageError
@@ -79,6 +80,12 @@ def configure_logging() -> None:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging()
     logger = logging.getLogger("app.startup")
+
+    # After configure_logging, so its own warning reaches a configured handler;
+    # before the production CORS check below, so a startup crash is itself
+    # reported rather than vanishing into the log. It cannot raise - see
+    # app/core/observability.py - so a bad DSN leaves the API fully functional.
+    init_sentry(settings)
 
     missing = settings.missing_critical_secrets()
     if missing:

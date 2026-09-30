@@ -122,6 +122,51 @@ class Settings(BaseSettings):
     environment: Literal["development", "staging", "production", "test"] = "development"
     debug: bool = False
 
+    @field_validator("debug", mode="before")
+    @classmethod
+    def coerce_debug(cls, v: object) -> bool:
+        """Coerce DEBUG to a bool instead of refusing to boot over it.
+
+        WHY THIS EXISTS. ``debug: bool`` on its own makes pydantic STRICT: any
+        value it cannot parse is a ValidationError raised from ``Settings()`` in
+        ``app/main.py``, i.e. at import time, i.e. before the app has served a
+        single request. That turns a cosmetic slip in somebody's shell into a
+        total outage whose stack trace is about booleans.
+
+        This is not hypothetical. A developer with ``DEBUG=release`` exported -
+        a plausible thing for a Go or Node habit to leave lying around - could not
+        run the test suite at all. Collection died with::
+
+            ValidationError: 1 validation error for Settings
+            debug
+              Input should be a valid boolean, unable to interpret input
+              [type=bool_parsing, input_value='release']
+
+        The fix is to be liberal in what we accept and conservative in what we
+        infer from it.
+
+        THE RULE. ``true``/``1``/``yes``/``on`` (any case, surrounding whitespace
+        ignored) mean True. Everything else means False, and nothing raises.
+
+        FAILING SAFE IS THE POINT. An unrecognised value resolving to False is
+        deliberate. The failure mode of a debug flag stuck ON is a traceback page
+        in production, possibly carrying environment values with it; the failure
+        mode of it stuck OFF is a missing traceback that nobody is relying on yet.
+
+        THE ONE REAL NARROWING. Pydantic's own parser also accepts ``t``/``f``/
+        ``y``/``n`` and the digits as ints. This validator accepts the four
+        spellings above and nothing else, so ``DEBUG=t`` now reads as False where
+        it previously read as True. That is the safe direction for this flag, and
+        ``.env.example`` and ``infra/render.yaml`` both already write
+        ``true``/``false``.
+
+        Real bools survive untouched, so ``Settings(debug=True)`` - how tests
+        construct it - still yields True.
+        """
+        if isinstance(v, bool):
+            return v
+        return str(v).strip().lower() in {"true", "1", "yes", "on"}
+
     @classmethod
     def settings_customise_sources(
         cls,

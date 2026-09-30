@@ -416,28 +416,6 @@ async def get_current_principal(
     )
 
 
-def require_role(minimum: Role):
-    """Dependency factory enforcing a minimum role.
-
-    Applied per route rather than globally. Even now that Supabase Auth issues the
-    tokens Storage's RLS would evaluate, the API is the ONLY authorization
-    boundary by design - file access is brokered through signed URLs, so there is
-    one place to audit rather than two.
-    """
-
-    async def _dependency(
-        principal: Principal = Depends(get_current_principal),
-    ) -> Principal:
-        if not principal.has_role(minimum):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Requires {minimum.value} or higher",
-            )
-        return principal
-
-    return _dependency
-
-
 def resolve_owned_user_id(principal: Principal, requested_user_id: str | None) -> str:
     """Guard against horizontal privilege escalation.
 

@@ -2632,7 +2632,7 @@
           },
           "options": {
             "items": {
-              "$ref": "#/components/schemas/app__api__v1__ingestion__OptionIn"
+              "$ref": "#/components/schemas/app__api__v1__ingestion___shared__OptionIn"
             },
             "title": "Options",
             "type": "array"
@@ -3841,7 +3841,7 @@
         "title": "ValidationError",
         "type": "object"
       },
-      "app__api__v1__ingestion__OptionIn": {
+      "app__api__v1__ingestion___shared__OptionIn": {
         "additionalProperties": false,
         "properties": {
           "is_correct": {

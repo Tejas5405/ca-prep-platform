@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -15,12 +14,10 @@ from app.core.config import Settings, get_settings
 from app.core.dependencies import get_db, get_redis_client, get_request_id
 from app.core.envelope import paginated, problem, success
 from app.core.identity import get_current_user
-from app.core.permissions import Permission, require_permission
 from app.core.security import Principal, get_current_principal
 from app.models.progress import MockAttempt, MockTest
 from app.models.question import Question, QuestionOption
 from app.models.user import User
-from app.repositories.draft_review import SqlPublishingStore
 from app.repositories.mocks import SqlMockRepository
 from app.schemas.mocks import (
     StartAttemptIn,
@@ -28,80 +25,17 @@ from app.schemas.mocks import (
 )
 from app.services import mock_scoring
 from app.services.entitlements import entitlements_for
-from app.services.publishing import AlreadyPublished, Incomplete
 
-logger = logging.getLogger(__name__)
+from ._shared import (
+    _attempt_payload,
+    _options_by_question,
+    _paper_questions,
+    logger,
+)
+
 router = APIRouter(tags=["mocks"])
 
-
-async def _options_by_question(
-    session: AsyncSession, question_ids: list[uuid.UUID]
-) -> dict[uuid.UUID, list[QuestionOption]]:
-    """Options for a set of questions, in presentation order.
-
-    A `sequence` column exists so that the order is stable across renders; the
-    label is a fallback for rows seeded before it, because an exam paper whose
-    options shuffle between the question screen and the report is a bug students
-    notice immediately.
-    """
-    if not question_ids:
-        return {}
-    rows = await session.execute(
-        select(QuestionOption)
-        .where(QuestionOption.question_id.in_(question_ids))
-        .order_by(QuestionOption.sequence, QuestionOption.label)
-    )
-    grouped: dict[uuid.UUID, list[QuestionOption]] = {}
-    for option in rows.scalars().all():
-        grouped.setdefault(option.question_id, []).append(option)
-    return grouped
-
-
-def _paper_questions(
-    questions: list[Question], options: dict[uuid.UUID, list[QuestionOption]]
-) -> list[dict[str, Any]]:
-    """A paper as the CLIENT may see it: no answer key, no explanation.
-
-    The distinction matters even though the same data is revealed after
-    submission: a paper sent with `isCorrect` on each option is a paper whose
-    answers are in the browser's memory, and a student who opens devtools has the
-    key to a timed exam. After submitting, the correct answer is in the response on
-    purpose - that is the teaching moment.
-    """
-    return [
-        {
-            "id": str(question.id),
-            "text": question.text,
-            "questionType": question.question_type,
-            "difficulty": question.difficulty,
-            "marks": question.marks,
-            "negativeMarks": float(question.negative_marks or 0),
-            "subjectId": str(question.subject_id) if question.subject_id else None,
-            "chapterId": str(question.chapter_id) if question.chapter_id else None,
-            "options": [
-                {"label": option.label, "text": option.text}
-                for option in options.get(question.id, [])
-            ],
-        }
-        for question in questions
-    ]
-
-
-def _attempt_payload(attempt: MockAttempt, mock: Any) -> dict[str, Any]:
-    return {
-        "attemptId": str(attempt.id),
-        "mockTestId": str(mock.id),
-        "title": mock.title,
-        "kind": mock.kind,
-        "status": attempt.status,
-        "startedAt": attempt.started_at.isoformat(),
-        "expiresAt": attempt.expires_at.isoformat(),
-        "durationMin": mock.duration_min,
-        "totalMarks": mock.total_marks,
-        "autoSubmitted": attempt.auto_submitted,
-        "score": attempt.score,
-        "maxScore": attempt.max_score,
-    }
+"""Mock papers and the attempt lifecycle: start, read, submit, score."""
 
 
 @router.get("/mocks", summary="List mock tests")
@@ -559,202 +493,3 @@ async def _cohort_scores(
         )
     )
     return [int(score) for (score,) in rows.all()]
-
-
-@router.get("/mock-attempts/{attempt_id}/report", summary="Attempt Report")
-async def attempt_report(
-    attempt_id: str,
-    session: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
-) -> Any:
-    """The finished paper with the answer key, question by question.
-
-    This route used to raise 404 unconditionally, with a comment claiming the
-    attempt was scoped to the principal - which it was, and which made the 404
-    correct, because no attempt was ever persisted to scope to. It now reads the
-    stored attempt and its stored answers, and joins them to the paper.
-
-    AUTHORIZATION. The attempt is looked up by ``attempt_for_user``, which puts
-    ``user_id`` in the WHERE clause. An attempt id is not a capability, and a
-    student who guesses another's id gets the same 404 as a student who guesses
-    nothing at all.
-    """
-    try:
-        attempt_uuid = uuid.UUID(attempt_id)
-    except ValueError:
-        return problem(
-            status=status.HTTP_404_NOT_FOUND,
-            title="Attempt not found",
-            detail="No attempt with that id.",
-            type_slug="mocks",
-        )
-
-    repository = SqlMockRepository(session)
-    attempt = await repository.attempt_for_user(attempt_id=attempt_uuid, user_id=user.id)
-    if attempt is None:
-        return problem(
-            status=status.HTTP_404_NOT_FOUND,
-            title="Attempt not found",
-            detail="No attempt with that id.",
-            type_slug="mocks",
-        )
-
-    if attempt.status == "IN_PROGRESS":
-        return problem(
-            status=status.HTTP_409_CONFLICT,
-            title="Attempt still in progress",
-            detail="Submit the paper before opening its report.",
-            type_slug="mocks",
-        )
-
-    mock = await session.get(MockTest, attempt.mock_test_id)
-    if mock is None:
-        return problem(
-            status=status.HTTP_404_NOT_FOUND,
-            title="Attempt not found",
-            detail="The paper for this attempt no longer exists.",
-            type_slug="mocks",
-        )
-
-    questions = await repository.questions_for(mock)
-    options = await _options_by_question(session, [question.id for question in questions])
-
-    stored_by_question: dict[str, dict[str, Any]] = {
-        str(entry.get("q")): entry for entry in (attempt.answers or []) if isinstance(entry, dict)
-    }
-
-    breakdown = []
-    for question in questions:
-        ordered = options.get(question.id, [])
-        stored = stored_by_question.get(str(question.id), {})
-        # Prefer the index stored at submit. Falling back to the live key is only
-        # for papers sat before that index was stored.
-        if "correct" in stored:
-            correct_index = stored.get("correct")
-        else:
-            correct_index = next(
-                (index for index, option in enumerate(ordered) if option.is_correct), None
-            )
-        chosen = stored.get("chosen")
-        if correct_index is None:
-            outcome = "PENDING_REVIEW"
-        elif chosen is None:
-            outcome = "UNATTEMPTED"
-        elif chosen == correct_index:
-            outcome = "CORRECT"
-        else:
-            outcome = "WRONG"
-
-        breakdown.append(
-            {
-                "questionId": str(question.id),
-                "text": question.text,
-                "marks": question.marks,
-                "difficulty": question.difficulty,
-                "chosenOption": chosen,
-                "correctOption": correct_index,
-                "outcome": outcome,
-                "explanation": question.explanation,
-                "options": [
-                    {
-                        "label": option.label,
-                        "text": option.text,
-                        "isCorrect": option.is_correct,
-                    }
-                    for option in ordered
-                ],
-            }
-        )
-
-    # The score columns are the mark given at submit. The breakdown uses the option
-    # index stored on the attempt when one was stored, so a later correction of the
-    # live key does not change what this student was marked against. Papers sat
-    # before that index was stored still fall back to the live key.
-    return success(
-        {
-            "attemptId": str(attempt.id),
-            "mockTestId": str(mock.id),
-            "title": mock.title,
-            "kind": mock.kind,
-            "status": attempt.status,
-            "submittedAt": attempt.submitted_at.isoformat() if attempt.submitted_at else None,
-            "autoSubmitted": attempt.auto_submitted,
-            "timeTakenSeconds": attempt.time_taken_seconds,
-            "score": attempt.score,
-            "maxScore": attempt.max_score,
-            "correct": attempt.correct_count,
-            "wrong": attempt.wrong_count,
-            "unattempted": attempt.unattempted_count,
-            "pendingReview": attempt.pending_review_count,
-            "questions": breakdown,
-        },
-        request_id=get_request_id(),
-    )
-
-
-@router.post("/admin/mocks/{mock_id}/publish")
-async def publish_mock(
-    mock_id: str,
-    session: AsyncSession = Depends(get_db),
-    caller: User = Depends(require_permission(Permission.PUBLISH_CONTENT)),
-):
-    """Publish a mock paper. Content Manager or above (v3 §8.2).
-
-    THIS USED TO WRITE NOTHING. It answered `200 {"status": "PUBLISHED"}` for any
-    id - including ids that did not exist - and left the row in DRAFT, so the
-    response was a lie that no client could detect: the paper simply never appeared
-    in `GET /mocks`, which lists published papers only.
-
-    A paper may only go live when every question on it is published. Otherwise a
-    student opens a paper that cannot be scored, and the report shows a denominator
-    built from questions nobody approved.
-    """
-    try:
-        key = uuid.UUID(mock_id)
-    except ValueError:
-        return problem(
-            status=status.HTTP_400_BAD_REQUEST,
-            title="Invalid mock id",
-            detail="Mock ids are UUIDs.",
-            type_slug="validation",
-        )
-
-    store = SqlPublishingStore()
-    try:
-        result = await store.publish_mock(key, verifier_id=caller.id, session=session)
-    except AlreadyPublished as exc:
-        return problem(
-            status=status.HTTP_409_CONFLICT,
-            title="Already published",
-            detail=str(exc),
-            type_slug="conflict",
-        )
-    except Incomplete as exc:
-        return problem(
-            status=status.HTTP_409_CONFLICT,
-            title="This paper is not ready",
-            detail=str(exc),
-            type_slug="conflict",
-        )
-
-    if result is None:
-        return problem(
-            status=status.HTTP_404_NOT_FOUND,
-            title="Mock paper not found",
-            detail=f"No mock paper with id {mock_id}",
-            type_slug="not-found",
-        )
-
-    await session.commit()
-    return success(
-        {
-            "mockTestId": str(result.content_id),
-            "status": result.status,
-            "previousStatus": result.previous_status,
-            # The person on the record, taken from the TOKEN rather than the body:
-            # a verifier the client could name proves nothing.
-            "verifiedBy": str(result.verified_by),
-            "questionCount": result.question_count,
-        },
-        request_id=get_request_id(),
-    )
