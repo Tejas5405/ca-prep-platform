@@ -98,6 +98,46 @@ services:
       # client-controlled header, and the limiter can be walked around.
       - key: RATE_LIMIT_TRUSTED_PROXIES
         value: "1"
+      # The anonymous bucket. Stated explicitly rather than left to the code
+      # default: a limit that exists only in a default is one nobody reviews,
+      # and the first person to meet it learns about it from a live 429.
+      - key: RATE_LIMIT_PER_MINUTE
+        value: "100"
+      # Per-route overrides, cheaper-per-call routes get smaller buckets.
+      # A prefix that does not match the real route leaves the override inert
+      # and silently falls back to the generic limit above.
+      - key: RATE_LIMIT_ASSISTANT_PER_MINUTE
+        value: "20"
+      - key: RATE_LIMIT_PAYMENT_PER_MINUTE
+        value: "10"
+      - key: RATE_LIMIT_UPLOAD_PER_MINUTE
+        value: "5"
+      # Error reporting. sync: false - a DSN is a write-only credential and must
+      # never be committed. Left unset, init_sentry() in app/core/observability.py
+      # is a no-op and the app still starts; that is deliberate, so a staging
+      # box without Sentry is not a boot failure.
+      - key: SENTRY_DSN
+        sync: false
+      # ==========================================================================
+      # PAYMENTS
+      # ==========================================================================
+      # The webhook secret is the one that matters most. Without it the webhook
+      # route refuses every request (401), so payments are never activated -
+      # a silent revenue outage rather than an error. It must be the same value
+      # as in the Razorpay dashboard, and rotated together with it.
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
+      # The API host is identical for test and live keys - the test/live
+      # distinction lives in the KEY PREFIX (rzp_test_ vs rzp_live_), which is
+      # why config.py refuses to boot a staging box holding an rzp_live_ key.
+      # Set explicitly here so the value is visible in the dashboard rather than
+      # being an invisible default.
+      - key: RAZORPAY_BASE_URL
+        value: https://api.razorpay.com/v1
       # Explicit allow-list. The app refuses to boot in production if this is
       # empty or contains "*".
       - key: CORS_ORIGINS
