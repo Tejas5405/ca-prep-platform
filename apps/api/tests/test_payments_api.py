@@ -310,8 +310,21 @@ def reset_doubles(monkeypatch):
     import app.repositories.billing as billing_module
 
     monkeypatch.setattr(billing_module, "SqlBillingStore", FakeStore)
-    monkeypatch.setattr(payments_module, "SqlBillingStore", FakeStore)
-    monkeypatch.setattr(payments_module, "RazorpayClient", FakeGateway)
+    import app.api.v1.payments._shared as payments_shared
+    import app.api.v1.payments.confirm as payments_confirm
+    import app.api.v1.payments.orders as payments_orders
+    import app.api.v1.payments.webhooks as payments_webhooks
+
+    # PHASE 5b. app/api/v1/payments.py is now a package, so each sub-module holds
+    # its OWN binding of these two names. Patching the package no longer
+    # intercepts them - the fake would be silently ignored and the route would
+    # reach the real store and the real gateway. Every sub-module that binds a
+    # name is patched instead. The fakes, and every assertion that uses them, are
+    # unchanged; only the module the patch is applied to has moved.
+    for _mod in (payments_shared, payments_orders, payments_confirm, payments_webhooks):
+        monkeypatch.setattr(_mod, "SqlBillingStore", FakeStore, raising=False)
+    for _mod in (payments_shared, payments_orders):
+        monkeypatch.setattr(_mod, "RazorpayClient", FakeGateway, raising=False)
     yield
     app.dependency_overrides.clear()
 

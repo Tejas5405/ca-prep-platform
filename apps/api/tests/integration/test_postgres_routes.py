@@ -277,11 +277,21 @@ def use_gateway(monkeypatch: pytest.MonkeyPatch):
     """Install a fake gateway and hand it to the test."""
 
     def _install(gateway: FakeGateway) -> FakeGateway:
-        monkeypatch.setattr(
-            payments_route,
-            "RazorpayClient",
-            lambda *args, **kwargs: gateway,
-        )
+        # PHASE 5b. app/api/v1/payments.py is now a package, so `RazorpayClient`
+        # has one binding per sub-module that uses it. Patching the package would
+        # no longer intercept anything and the route would reach the real gateway.
+        # Patch every sub-module that binds one; the fake and the assertions
+        # around it are unchanged.
+        import app.api.v1.payments._shared as payments_shared
+        import app.api.v1.payments.orders as payments_orders
+
+        for _mod in (payments_shared, payments_orders):
+            monkeypatch.setattr(
+                _mod,
+                "RazorpayClient",
+                lambda *args, **kwargs: gateway,
+                raising=False,
+            )
         return gateway
 
     return _install

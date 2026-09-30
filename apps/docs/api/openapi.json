@@ -2003,7 +2003,7 @@
             "anyOf": [
               {
                 "items": {
-                  "$ref": "#/components/schemas/app__api__v1__studio__OptionIn"
+                  "$ref": "#/components/schemas/app__api__v1__studio___shared__OptionIn"
                 },
                 "type": "array"
               },
@@ -2226,7 +2226,7 @@
             "anyOf": [
               {
                 "items": {
-                  "$ref": "#/components/schemas/app__api__v1__studio__OptionIn"
+                  "$ref": "#/components/schemas/app__api__v1__studio___shared__OptionIn"
                 },
                 "type": "array"
               },
@@ -2374,7 +2374,7 @@
             "anyOf": [
               {
                 "items": {
-                  "$ref": "#/components/schemas/app__api__v1__studio__OptionIn"
+                  "$ref": "#/components/schemas/app__api__v1__studio___shared__OptionIn"
                 },
                 "type": "array"
               },
@@ -3909,7 +3909,7 @@
         "title": "AnswerIn",
         "type": "object"
       },
-      "app__api__v1__studio__OptionIn": {
+      "app__api__v1__studio___shared__OptionIn": {
         "additionalProperties": false,
         "properties": {
           "label": {

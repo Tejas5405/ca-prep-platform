@@ -54,7 +54,9 @@ ignore = [
 "app/models/*" = ["A003"]   # `type` column names shadow a builtin intentionally
 # The campus router is a long sequence of the same response shape. Wrapping every
 # call to 100 columns makes the file harder to read than the limit is worth.
-"app/api/v1/campus.py" = ["E501"]
+# Phase 5b: campus.py is now a package. The ignore was scoped to the single file,
+# so the sub-modules no longer matched it; the long lines moved with the code.
+"app/api/v1/campus/*.py" = ["E501"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["app"]
