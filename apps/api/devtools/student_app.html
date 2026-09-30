@@ -1,0 +1,149 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CA Prep — Student</title><style>
+*{box-sizing:border-box}body{margin:0;font:15px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;background:#0d0f14;color:#e8eaed}
+header{background:#141821;padding:14px 20px;display:flex;align-items:center;gap:14px;border-bottom:1px solid #232833;position:sticky;top:0;z-index:9}
+.logo{font-weight:700;font-size:16px}.tag{font-size:10px;background:#3a2a12;border:1px solid #7a5a20;color:#f0c674;padding:2px 7px;border-radius:4px}
+nav{margin-left:auto;display:flex;gap:4px}nav b{padding:7px 14px;border-radius:6px;cursor:pointer;font-weight:600;font-size:14px;color:#9aa3b5}
+nav b.on{background:#2d5fd3;color:#fff}main{max-width:860px;margin:0 auto;padding:20px}
+.c{background:#151922;border:1px solid #232833;border-radius:10px;padding:18px;margin-bottom:14px}
+h2{font-size:17px;margin:0 0 14px}h3{font-size:14px;color:#9aa3b5;margin:16px 0 8px;text-transform:uppercase;letter-spacing:.5px;font-size:11px}
+button{font:inherit;cursor:pointer;border-radius:7px;border:1px solid #2b3242;background:#1c2130;color:#dfe3ea;padding:9px 15px}
+button.p{background:#2d5fd3;border-color:#2d5fd3;color:#fff;font-weight:600}
+button:hover{filter:brightness(1.18)}button:disabled{opacity:.5;cursor:not-allowed}
+.cl{width:100%;text-align:left;display:flex;justify-content:space-between;align-items:center;padding:13px 15px;margin-bottom:7px;background:#1a1f2b}
+.cl:hover{background:#222839}.crumb{color:#6d7螺8;font-size:12px;margin-bottom:6px}
+.q{font-size:17px;line-height:1.65;margin:14px 0 18px}
+.opt{display:block;width:100%;text-align:left;padding:13px 15px;margin-bottom:9px;background:#1a1f2b;border:1px solid #2b3242;border-radius:8px;font-size:15px}
+.opt:hover{background:#222839}.opt.sel{border-color:#2d5fd3;background:#1b2740}
+.opt.correct{border-color:#2e9e5b;background:#152c1f}.opt.wrong{border-color:#c0392b;background:#2c1719}
+.res{padding:14px;border-radius:8px;margin-top:14px;font-size:15px}
+.res.ok{background:#152c1f;border:1px solid #2e9e5b}.res.no{background:#2c1719;border:1px solid #c0392b}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:11px}
+.st{background:#1a1f2b;border:1px solid #232833;border-radius:9px;padding:15px;text-align:center}
+.st b{display:block;font-size:26px;color:#5cc8e8}.st span{font-size:11px;color:#8b93a5;text-transform:uppercase;letter-spacing:.5px}
+.mut{color:#8b93a5;font-size:13px}.plan{display:flex;justify-content:space-between;align-items:center;padding:13px;border:1px solid #232833;border-radius:8px;margin-bottom:8px;background:#1a1f2b}
+.plan.hi{border-color:#2d5fd3}.price{font-weight:700;font-size:18px}
+#toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#2d5fd3;color:#fff;padding:11px 20px;border-radius:8px;display:none;z-index:99}
+</style></head><body>
+<header><span class="logo">CA Prep</span><span class="tag">DEV</span>
+<nav><b data-t="learn" class="on">Learn</b><b data-t="progress">My Progress</b><b data-t="plans">Plans</b><b data-t="me">Account</b></nav></header>
+<main>
+<section id="learn">
+ <div class="c"><h2>Start with your level</h2><div id="courses" class="mut">Loading…</div></div>
+ <div class="c" id="subjects" style="display:none"></div>
+ <div class="c" id="chapters" style="display:none"></div>
+ <div class="c" id="practice" style="display:none"></div>
+</section>
+<section id="progress" style="display:none">
+ <div class="c"><h2>My progress</h2><div id="stats" class="grid"></div></div>
+ <div class="c"><h2>By subject</h2><div id="bysub"></div></div>
+ <div class="c"><h2>Focus areas <span class="mut">(weakest first)</span></h2><div id="focus"></div></div>
+</section>
+<section id="plans" style="display:none"><div class="c"><h2>Plans</h2><div id="plansc" class="mut">Loading…</div></div></section>
+<section id="me" style="display:none"><div class="c"><h2>Account</h2><div id="meC" class="mut">Loading…</div></div></section>
+</main><div id="toast"></div>
+<script>
+const A='/api/v1';
+const t=(m)=>{const e=document.getElementById('toast');e.textContent=m;e.style.display='block';setTimeout(()=>e.style.display='none',2200)};
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function api(p,o={}){o.headers=Object.assign({'Content-Type':'application/json'},o.headers||{});
+ const r=await fetch(p,o);let j=null;try{j=await r.json()}catch(e){}
+ if(!r.ok)throw new Error((j&&(j.detail&&(j.detail.title||j.detail)))||r.status);return j}
+document.querySelectorAll('nav b').forEach(b=>b.onclick=()=>{
+ document.querySelectorAll('nav b').forEach(x=>x.classList.remove('on'));b.classList.add('on');
+ document.querySelectorAll('main section').forEach(s=>s.style.display='none');
+ document.getElementById(b.dataset.t).style.display='block';
+ ({progress:loadProgress,plans:loadPlans,me:loadMe})[b.dataset.t]?.();});
+
+loadCourses();
+async function loadCourses(){
+ try{const r=await api(A+'/curriculum/courses');
+  document.getElementById('courses').className='';
+  document.getElementById('courses').innerHTML=r.data.courses.map(c=>
+   `<button class="cl" style="width:100%;margin-bottom:8px" onclick="pickCourse('${c.id}','${esc(c.name)}')">
+     <span><b>${esc(c.name)}</b><br><span class="mut">${c.level} · ${c.syllabusScheme}</span></span><span>›</span></button>`).join('');
+ }catch(e){document.getElementById('courses').innerHTML='<span class="mut">'+e.message+'</span>'}
+}
+let CUR='';
+async function pickCourse(id,name){CUR=id;show('subjects',`<div class="crumb">${esc(name)}</div><h2>Subjects</h2><div class="mut">Loading…</div>`);
+ try{const r=await api(`${A}/curriculum/subjects?course_id=${id}`);
+  document.getElementById('subjects').innerHTML=`<div class="crumb">${esc(name)}</div><h2>Subjects</h2>`+
+   r.data.subjects.map(s=>`<button class="cl" style="width:100%;margin-bottom:8px" onclick="pickSubject('${s.id}','${esc(s.code)} ${esc(s.name)}')">
+    <span><b>${esc(s.name)}</b><br><span class="mut">${esc(s.code)}</span></span><span>›</span></button>`).join('')
+   ||'<p class="mut">No subjects.</p>';}catch(e){document.getElementById('subjects').innerHTML='<p class="mut">'+e.message+'</p>'}
+}
+async function pickSubject(id,name){show('chapters',`<h2>Chapters</h2><div class="mut">Loading…</div>`);
+ try{const r=await api(`${A}/curriculum/chapters?subject_id=${id}`);
+  const ch=r.data.chapters||[];
+  document.getElementById('chapters').innerHTML=`<div class="crumb">${esc(name)}</div><h2>Chapters</h2>`+
+   ch.map(c=>`<button class="cl" style="width:100%;margin-bottom:8px" onclick="practise('${c.id}','${esc(c.code||c.name)}')">
+    <span><b>${esc(c.code||'')} ${esc(c.name||'')}</b></span><span>Practise ›</span></button>`).join('')
+   ||'<p class="mut">No chapters.</p>';}catch(e){document.getElementById('chapters').innerHTML='<p class="mut">'+e.message+'</p>'}
+}
+let QN=0,QS=[];
+async function practise(chapId,name){
+ show('practice',`<div class="crumb">${esc(name)}</div><h2>Practise</h2><div class="mut">Loading questions…</div>`);
+ try{const r=await api(`${A}/practice/questions?chapter_id=${chapId}`);
+  QS=r.data.questions||[];QN=0;if(!QS.length){document.getElementById('practice').innerHTML=`<div class="crumb">${esc(name)}</div><p class="mut">No published questions in this chapter yet.</p>`;return}
+  q();}catch(e){document.getElementById('practice').innerHTML='<p class="mut">'+e.message+'</p>'}
+}
+function q(){const q=QS[QN];
+ document.getElementById('practice').innerHTML=
+  `<div class="crumb">Question ${QN+1} of ${QS.length}</div>
+   <h3>${q.difficulty} · ${q.marks} mark(s) · ${q.negativeMarks} negative</h3>
+   <div class="q">${esc(q.text)}</div>
+   <div id="opts">${(q.options||[]).map(o=>`<button class="opt" onclick="pick('${esc(o.label)}',this)">${esc(o.label)}. ${esc(o.text)}</button>`).join('')}</div>
+   <button class="p" id="sub" disabled onclick="submit()">Submit answer</button>`;
+ let sel=null;
+ window.pick=(l,el)=>{sel=l;document.querySelectorAll('.opt').forEach(x=>x.classList.remove('sel'));el.classList.add('sel');document.getElementById('sub').disabled=false};
+ window.submit=async()=>{const btn=document.getElementById('sub');btn.disabled=true;
+  try{const r=await api(A+'/practice/answers',{method:'POST',body:JSON.stringify({question_id:q.id,chosen_option:sel})});
+   const d=r.data,ok=d.isCorrect;
+   document.querySelectorAll('.opt').forEach(el=>{const L=el.textContent.trim()[0];
+    if(L===String(d.correctAnswer))el.classList.add('correct');
+    else if(el.classList.contains('sel'))el.classList.add('wrong')});
+   const bar=document.createElement('div');bar.className='res '+(ok?'ok':'no');
+   bar.innerHTML=`<b>${ok?'✓ Correct':'✗ Incorrect'}</b><br>Correct answer: <b>${esc(d.correctAnswer)}</b>
+     &nbsp;·&nbsp; points <b>${d.pointsAwarded}</b>${d.explanation?'<br><br>'+esc(d.explanation):''}`;
+   document.getElementById('practice').appendChild(bar);
+   const nx=document.createElement('button');nx.className='p';nx.style.marginTop='12px';
+   nx.textContent=QN+1<QS.length?'Next question →':'See my progress';
+   nx.onclick=()=>{QN+1<QS.length?q():(document.querySelector('nav b[data-t=progress]').click(),0)};
+   document.getElementById('practice').appendChild(nx);nx.focus();
+  }catch(e){t('Failed: '+e.message);btn.disabled=false}};}
+function show(id,html){document.querySelectorAll('main section').forEach(s=>s.style.display='none');
+ document.getElementById('learn').style.display='block';document.getElementById(id).style.display='block';
+ document.getElementById(id).innerHTML=html;window.scrollTo(0,0)}
+async function loadProgress(){
+ try{const r=await api(A+'/progress/overview');const d=r.data,t=d.totals||{};
+  document.getElementById('stats').innerHTML=
+   `<div class="st"><b>${t.attempts||0}</b><span>Attempted</span></div>
+    <div class="st"><b>${t.correct||0}</b><span>Correct</span></div>
+    <div class="st"><b>${t.accuracy==null?'—':Math.round(t.accuracy*100)+'%'}</b><span>Accuracy</span></div>
+    <div class="st"><b>${t.pendingReview||0}</b><span>To review</span></div>`;
+  const bs=d.bySubject||[];
+  document.getElementById('bysub').innerHTML=bs.length?bs.map(s=>
+   `<div class="plan"><span>${esc(s.name)}</span><span class="mut">${s.attempted||s.attempts||0} attempted</span></div>`).join(''):'<p class="mut">Nothing yet — practise a chapter.</p>';
+  const f=d.focusAreas||[],st=d.strongAreas||[];
+  document.getElementById('focus').innerHTML=(f.length?f.map(x=>`<div class="plan"><span>${esc(x.name||x.chapterName||x)}</span><span class="mut">needs work</span></div>`).join(''):'<p class="mut">Nothing flagged yet.</p>')
+   +(st.length?'<h3 style="margin-top:18px">Strong</h3>'+st.map(x=>`<div class="plan"><span>${esc(x.name||x.chapterName||x)}</span><span class="mut">strong</span></div>`).join(''):'');
+ }catch(e){document.getElementById('stats').innerHTML='<p class="mut">'+e.message+'</p>'}}
+async function loadPlans(){
+ try{const r=await api(A+'/payments/plans');
+  document.getElementById('plansc').className='';
+  document.getElementById('plansc').innerHTML=r.data.plans.map((p,i)=>
+   `<div class="plan ${i===1?'hi':''}"><div><b>${esc(p.label)}</b><br><span class="mut">${esc(p.tagline||'')}</span></div>
+     <div class="price">${p.amountRupees?('₹'+p.amountRupees):'Free'}</div></div>`).join('')
+   +'<p class="mut" style="margin-top:14px">Payments are not wired to a live gateway in this environment.</p>';
+ }catch(e){document.getElementById('plansc').innerHTML='<p class="mut">'+e.message+'</p>'}}
+async function loadMe(){
+ try{const r=await api(A+'/me');const d=r.data,e=d.entitlements||{};
+  document.getElementById('meC').className='';
+  document.getElementById('meC').innerHTML=
+   `<div class="plan"><span>Name</span><b>${esc(d.displayName||'—')}</b></div>
+    <div class="plan"><span>Email</span><span class="mut">${esc(d.email)}</span></div>
+    <div class="plan"><span>Role</span><span class="pill">${esc(d.role)}</span></div>
+    <div class="plan"><span>Plan</span><b>${esc(e.tier||'FREE')}</b></div>
+    <div class="plan"><span>Premium</span><b>${e.isPremium?'Yes':'No'}</b></div>`;
+ }catch(e){document.getElementById('meC').innerHTML='<p class="mut">'+e.message+'</p>'}}
+</script></body></html>

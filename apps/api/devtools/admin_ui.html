@@ -1,0 +1,221 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>CA Prep — Content Console (DEV)</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:#0f1115;color:#e6e6e6}
+header{background:#161922;padding:14px 20px;border-bottom:1px solid #262b36;display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+h1{font-size:16px;margin:0;font-weight:600}.warn{background:#3a2a12;border:1px solid #7a5a20;color:#f0c674;padding:3px 9px;border-radius:4px;font-size:11px}
+nav{display:flex;gap:4px;margin-left:auto}nav button{background:#1e222d;color:#cfd3dc;border:1px solid #2b3040;padding:6px 13px;border-radius:5px;cursor:pointer;font-size:13px}
+nav button.on{background:#2d5fd3;border-color:#2d5fd3;color:#fff}
+main{padding:20px;max-width:1100px;margin:0 auto}
+.card{background:#161922;border:1px solid #262b36;border-radius:8px;padding:18px;margin-bottom:16px}
+h2{font-size:15px;margin:0 0 14px}.row{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+label{display:block;font-size:11px;color:#8b93a5;margin-bottom:3px;text-transform:uppercase;letter-spacing:.4px}
+input,select,textarea{width:100%;background:#0f1115;border:1px solid #2b3040;color:#e6e6e6;padding:7px 9px;border-radius:5px;font:inherit}
+textarea{min-height:76px;resize:vertical}.f{flex:1;min-width:150px}
+button.act{background:#2d5fd3;border:0;color:#fff;padding:9px 18px;border-radius:5px;cursor:pointer;font-weight:600}
+button.act.sec{background:#333a49}button.act:hover{filter:brightness(1.15)}
+table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:7px 9px;border-bottom:1px solid #232834}
+th{color:#8b93a5;font-size:11px;text-transform:uppercase;letter-spacing:.4px}
+.pill{display:inline-block;padding:1px 7px;border-radius:9px;font-size:11px;font-weight:600}
+.PUBLISHED{background:#14432a;color:#5ed99a}.DRAFT{background:#3a3520;color:#e0c46c}.APPROVED{background:#123a4a;color:#5cc8e8}
+.sbs{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:12px 0}
+.sbs>div{background:#0b0d11;border:1px solid #232834;border-radius:7px;padding:13px;font-size:14px;line-height:1.65;max-height:260px;overflow:auto}
+.sbs .lbl{font-size:10px;color:#8b93a5;text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px}
+mark{background:#4a3a10;color:#f5d97a;padding:1px 3px;border-radius:3px}
+.warnq{background:#3a1f1f;border:1px solid #7a3a3a;color:#f0a0a0;padding:9px;border-radius:6px;font-size:13px;margin-top:9px}
+@media(max-width:820px){.sbs{grid-template-columns:1fr}}
+.out{background:#0b0d11;border:1px solid #232834;border-radius:6px;padding:11px;font-family:ui-monospace,monospace;font-size:12px;max-height:230px;overflow:auto;white-space:pre-wrap}
+.ok{color:#5ed99a}.err{color:#ff7b72}
+</style></head><body>
+<header>
+<h1>CA Prep — Content Console</h1><span class="warn">DEV ONLY · not the production app</span>
+<nav>
+<button class="on" data-t="q">Questions</button>
+<button data-t="d">Review queue</button>
+<button data-t="u">Study material</button>
+<button data-t="c">Curriculum</button>
+</nav>
+</header>
+<main>
+<section id="q">
+<div class="card"><h2>Add a question</h2>
+<div class="row">
+<div class="f"><label>Course</label><select id="q_course"></select></div>
+<div class="f"><label>Subject</label><select id="q_subject"></select></div>
+<div class="f"><label>Chapter</label><select id="q_chapter"></select></div>
+</div>
+<div class="row">
+<div class="f"><label>Question text</label><textarea id="q_text" placeholder="Which of the following is NOT a charge for income tax purposes?"></textarea></div>
+</div>
+<div class="row">
+<div class="f"><label>Type</label><select id="q_type"><option>MCQ</option><option>MSQ</option><option>TRUE_FALSE</option><option>NUMERICAL</option><option>DESCRIPTIVE</option></select></div>
+<div class="f"><label>Difficulty</label><select id="q_diff"><option>EASY</option><option selected>MEDIUM</option><option>HARD</option></select></div>
+<div class="f"><label>Marks</label><input id="q_marks" type="number" value="2"></div>
+<div class="f"><label>Negative</label><input id="q_neg" type="number" value="1"></div>
+<div class="f"><label>Correct answer</label><input id="q_key" value="B" maxlength="2"></div>
+</div>
+<div class="row"><div class="f"><label>Options (one per line, prefix with A=, B=, C= …)</label><textarea id="q_opts">A=Rent paid
+B=Capital expenditure
+C=Salary
+D=Interest paid</textarea></div></div>
+<button class="act" onclick="createQ()">Create question</button>
+<button class="act sec" onclick="loadQ()">Refresh list</button>
+</div>
+<div class="card"><h2>Question bank (<span id="qcount">0</span>)</h2><table id="qt"><thead><tr><th>Status</th><th>Text</th><th>Type</th><th>Ch.</th><th></th></tr></thead><tbody></tbody></table></div>
+</section>
+
+<section id="d" style="display:none">
+<div class="card"><h2>Draft review — source side by side</h2>
+<p style="color:#8b93a5;margin-top:0">Every draft is AI-extracted from a PDF. The right pane is the <b>verbatim source quote</b> the extraction claimed it came from. <b>Approve only if the question is actually supported by that text.</b> Nothing reaches a student without this human step.</p>
+<button class="act" onclick="loadD()">Refresh queue</button></div>
+<div id="drafts"></div>
+</section>
+
+<section id="u" style="display:none">
+<div class="card"><h2>Register study material</h2>
+<p style="color:#8b93a5;margin-top:0">Register a PDF, then start the extraction job. A <b>worker must be running</b> (<code>python -m app.workers.rq_worker</code>) or the job stays QUEUED forever.</p>
+<div class="row">
+<div class="f"><label>Storage path (in Supabase Storage)</label><input id="u_path" placeholder="originals/2026/09/abc/material.pdf"></div>
+<div class="f"><label>Filename</label><input id="u_name" value="material.pdf"></div>
+</div>
+<div class="row"><div class="f"><label>Size (bytes)</label><input id="u_size" type="number" value="1024"></div>
+<div class="f"><label>Title</label><input id="u_title" value="Study Material"></div></div>
+<button class="act" onclick="regUpload()">Register</button>
+<button class="act sec" onclick="startJob()">Start extraction</button>
+<div id="uout" class="out" style="margin-top:12px">—</div></div>
+</section>
+
+<section id="c" style="display:none">
+<div class="card"><h2>Curriculum tree</h2><button class="act" onclick="loadC()">Load</button>
+<div id="cout" class="out" style="margin-top:12px">—</div></div>
+</section>
+</main>
+<script>
+const A='/api/v1';let ADMIN=null, CACHE={};
+async function api(p,o={}){o.headers=Object.assign({'Content-Type':'application/json'},o.headers||{});
+ const r=await fetch(p,o);let j=null;try{j=await r.json()}catch(e){}
+ if(!r.ok)throw new Error((j&&(j.detail||j.title))||r.status);return j}
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function say(el,msg,ok){const e=document.getElementById(el);e.innerHTML=`<span class="${ok?'ok':'err'}">${esc(msg)}</span>`}
+
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
+ document.querySelectorAll('nav button').forEach(x=>x.classList.remove('on'));b.classList.add('on');
+ document.querySelectorAll('main section').forEach(s=>s.style.display='none');
+ document.getElementById(b.dataset.t).style.display='block';});
+
+async function boot(){
+ try{const u=await api(A+'/admin/users');ADMIN=u.data?.[0];}catch(e){}
+ try{const c=await api(A+'/curriculum/courses');CACHE.courses=c.data.courses;
+  document.getElementById('q_course').innerHTML=c.data.courses.map(x=>`<option value="${x.id}">${esc(x.code)} — ${esc(x.name)}</option>`).join('');
+  await subjects();
+ }catch(e){}
+ loadQ();
+}
+async function subjects(){
+ const cid=document.getElementById('q_course').value;if(!cid)return;
+ try{const s=await api(`${A}/curriculum/subjects?course_id=${cid}`);CACHE.subjects=s.data.subjects;
+  document.getElementById('q_subject').innerHTML=s.data.subjects.map(x=>`<option value="${x.id}">${esc(x.code)}</option>`).join('');
+  await chapters();}catch(e){}
+}
+async function chapters(){
+ const sid=document.getElementById('q_subject').value;if(!sid)return;
+ try{const c=await api(`${A}/curriculum/chapters?subject_id=${sid}`);CACHE.chapters=c.data.chapters||c.data.chapters?.items||[];
+  document.getElementById('q_chapter').innerHTML=`<option value="">— none —</option>`+
+   CACHE.chapters.map(x=>`<option value="${x.id}">${esc(x.code||x.name)}</option>`).join('');}catch(e){}
+}
+document.getElementById('q_course')&&document.getElementById('q_course').addEventListener('change',subjects);
+document.getElementById('q_subject')&&document.getElementById('q_subject').addEventListener('change',chapters);
+
+async function createQ(){
+ const opts=document.getElementById('q_opts').value.split('\n').map(l=>l.trim()).filter(Boolean)
+  .map(l=>{const m=l.match(/^([A-Z])=(.*)$/);return m?{label:m[1],text:m[2]}:{label:String.fromCharCode(65+opts.indexOf(l)),text:l}});
+ try{
+  const r=await api(A+'/admin/questions',{method:'POST',body:JSON.stringify({
+   course_id:document.getElementById('q_course').value,
+   subject_id:document.getElementById('q_subject').value,
+   chapter_id:document.getElementById('q_chapter').value||null,
+   text:document.getElementById('q_text').value,
+   question_type:document.getElementById('q_type').value,
+   difficulty:document.getElementById('q_diff').value,
+   marks:Number(document.getElementById('q_marks').value),
+   negative_marks:Number(document.getElementById('q_neg').value),
+   correct_answer:document.getElementById('q_key').value.toUpperCase(),
+   options:opts})});
+  say('qout','created ✓','q')||0;
+  alert('Question created as a DRAFT.\n\nIt cannot be seen by a student until it is published with a verifier.');
+  loadQ();
+ }catch(e){alert('Failed: '+e.message)}
+}
+async function loadQ(){
+ try{const r=await api(A+'/admin/questions');
+  const rows=r.data.items||r.data||[];
+  document.getElementById('qcount').textContent=rows.length;
+  document.querySelector('#qt tbody').innerHTML=rows.slice(0,60).map(q=>
+   `<tr><td><span class="pill ${q.status}">${q.status}</span></td>
+    <td>${esc((q.text||'').slice(0,90))}</td><td>${q.questionType}</td><td>${esc(q.chapterCode||'-')}</td>
+    <td>${q.status==='DRAFT'?`<button class="act sec" onclick="pub('${q.id}')">Publish</button>`:''}</td></tr>`).join('')
+   ||'<tr><td colspan="5" style="color:#8b93a5">No questions yet — add one above.</td></tr>';
+ }catch(e){document.querySelector('#qt tbody').innerHTML=`<tr><td colspan="5" class="err">${esc(e.message)}</td></tr>`}
+}
+async function pub(id){try{await api(`${A}/admin/questions/${id}/publish`,{method:'POST'});loadQ();alert('Published ✓')}catch(e){alert(e.message)}}
+async function loadD(){
+ const box=document.getElementById('drafts');
+ try{const r=await api(A+'/ingestion/drafts');
+  const rows=r.data.items||r.data||[];
+  if(!rows.length){box.innerHTML='<div class="card"><p class="mut">No drafts waiting. Upload a PDF and start extraction to produce some.</p></div>';return}
+  box.innerHTML=rows.map(d=>{
+   const q=(d.sourceQuote||'').trim();
+   const txt=esc(d.text||'');
+   let left=txt;
+   if(q){const first=q.slice(0,60).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    left=txt.replace(new RegExp('('+first+'[\\s\\S]{0,400}?)','i'),'<mark>$1</mark>');}
+   return `<div class="card">
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:4px">
+      <span class="pill ${d.reviewStatus}">${esc(d.reviewStatus)}</span>
+      ${d.sourcePage?`<span class="mut">page ${d.sourcePage}</span>`:''}
+      ${d.detectionConfidence!=null?`<span class="mut">conf ${Math.round(d.detectionConfidence*100)}%</span>`:''}
+    </div>
+    <div class="sbs">
+      <div><div class="lbl">Extracted question</div>${left}</div>
+      <div><div class="lbl">Source quote from the PDF</div>${q?esc(q):'<span class="warnq">NO QUOTE — this draft cannot be verified. Reject it, or fix the extraction.</span>'}</div>
+    </div>
+    <textarea id="q_${d.id}" placeholder="Optional: correct or widen the verbatim quote…" style="margin-top:10px">${esc(q)}</textarea>
+    <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+      <button class="act" onclick="decide('${d.id}','APPROVE')">Approve &amp; publish</button>
+      <button class="act sec" onclick="decide('${d.id}','REJECT')">Reject</button>
+      <button class="act sec" onclick="decide('${d.id}','DUPLICATE')">Duplicate</button>
+    </div></div>`}).join('');
+ }catch(e){box.innerHTML='<div class="card"><p class="err">'+esc(e.message)+'</p></div>'}
+}
+async function decide(id,decision){
+ const el=document.getElementById('q_'+id);
+ const body={decision};
+ const v=el&&el.value.trim(); if(v)body.source_quote=v;
+ try{await api(`${A}/ingestion/drafts/${id}/review`,{method:'POST',body:JSON.stringify(body)});
+  alert(decision==='APPROVE'?'Approved. It is now a PUBLISHED question a student can see.':'Recorded: '+decision);
+  loadD()}catch(e){alert('Failed: '+e.message)}
+}
+async function regUpload(){
+ try{const r=await api(A+'/ingestion/uploads',{method:'POST',body:JSON.stringify({
+  filename:document.getElementById('u_name').value,
+  content_type:'application/pdf',
+  size_bytes:Number(document.getElementById('u_size').value),
+  storage_path:document.getElementById('u_path').value,
+  title:document.getElementById('u_title').value})});
+  CACHE.upload=r.data;CACHE.job=r.data.job||r.data;
+  say('uout','registered ✓\n'+JSON.stringify(r.data,null,2),true)}catch(e){say('uout',e.message,false)}}
+async function startJob(){
+ try{const id=(CACHE.job&&(CACHE.job.id||CACHE.job.job_id))||(CACHE.upload&&CACHE.upload.id);
+  if(!id)return say('uout','Register a document first.',false);
+  const r=await api(`${A}/ingestion/jobs/${id}/start`,{method:'POST'});
+  say('uout','job started ✓\n'+JSON.stringify(r.data,null,2),true)}catch(e){say('uout',e.message,false)}}
+async function loadC(){try{
+ const cs=CACHE.courses||(await api(A+'/curriculum/courses')).data.courses;
+ let out='';for(const c of cs){const s=await api(`${A}/curriculum/subjects?course_id=${c.id}`);
+  out+=`\n${c.code} — ${c.name} [${c.level}]\n`;
+  for(const x of s.data.subjects){const ch=await api(`${A}/curriculum/chapters?subject_id=${x.id}`);
+   const cl=ch.data.chapters||[];
+   out+=`   ${x.code} ${x.name} (${cl.length} chapters)\n`;}}
+ document.getElementById('cout').textContent=out||'empty'}catch(e){say('cout',e.message,false)}}
+boot();
+</script></body></html>
