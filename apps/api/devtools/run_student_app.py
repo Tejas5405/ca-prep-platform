@@ -41,16 +41,16 @@ DB = os.environ.get("DATABASE_URL", "postgresql+asyncpg://caprep@/caprep_v2_test
 
 def main() -> None:
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-    from starlette.responses import FileResponse, RedirectResponse
+    from starlette.responses import FileResponse
 
     engine = create_async_engine(DB)
     maker = async_sessionmaker(engine, expire_on_commit=False)
 
-    @app.get("/", include_in_schema=False)
-    async def _root() -> RedirectResponse:
-        return RedirectResponse("/app")
+    @app.get("/landing", include_in_schema=False)
+    async def _landing() -> FileResponse:
+        return FileResponse(Path(__file__).with_name("landing.html"))
 
-    @app.get("/app", include_in_schema=False)
+    @app.get("/ui", include_in_schema=False)
     async def _ui() -> FileResponse:
         return FileResponse(Path(__file__).with_name("student_app.html"))
 

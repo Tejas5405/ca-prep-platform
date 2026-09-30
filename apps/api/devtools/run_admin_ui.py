@@ -41,16 +41,16 @@ DB = os.environ.get("DATABASE_URL", "postgresql+asyncpg://caprep@/caprep_v2_test
 
 def main() -> None:
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-    from starlette.responses import FileResponse, RedirectResponse
+    from starlette.responses import FileResponse
 
     engine = create_async_engine(DB)
     maker = async_sessionmaker(engine, expire_on_commit=False)
 
-    @app.get("/", include_in_schema=False)
-    async def _root() -> RedirectResponse:
-        return RedirectResponse("/admin")
+    @app.get("/landing", include_in_schema=False)
+    async def _landing() -> FileResponse:
+        return FileResponse(Path(__file__).with_name("landing.html"))
 
-    @app.get("/admin", include_in_schema=False)
+    @app.get("/ui", include_in_schema=False)
     async def _ui() -> FileResponse:
         return FileResponse(Path(__file__).with_name("admin_ui.html"))
 
@@ -89,7 +89,7 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     lg = logging.getLogger("devtools")
-    lg.info("Content console -> http://127.0.0.1:8001/admin")
+    lg.info("Landing page  -> http://127.0.0.1:8002/landing")
     lg.info("API docs        -> http://127.0.0.1:8001/docs")
     lg.info("acting as       -> %s (%s)", admin.email, admin.role)
     uvicorn.run(app, host="127.0.0.1", port=8001, log_level="warning")
