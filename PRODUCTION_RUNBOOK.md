@@ -127,6 +127,36 @@ replay guard are both fail-closed by design. A 503 storm after deploy is this.
 | `CORS_ORIGINS` | your frontend origin | comma-separated, **no trailing slash** |
 | `SUPABASE_URL` | blueprint literal | must equal the frontend's value |
 | `SUPABASE_SECRET_KEY` | Supabase → Project Settings → service_role | **server-side only** |
+
+#### ⚠️ Silent Drop hazard — a misnamed variable is not an error
+
+The settings model runs with **`extra="ignore"`** (`app/core/config.py`). An
+environment variable it does not declare is **silently discarded**: no boot
+error, no log line, no warning.
+
+So `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_KEY` and `SUPABASE_JWT_SECRET` are
+all **not** valid names here — they are ignored, and the app boots looking
+healthy. Only these two Supabase variables exist:
+
+```
+SUPABASE_URL          (already a literal in the blueprint)
+SUPABASE_SECRET_KEY
+```
+
+**The failure chain if `SUPABASE_SECRET_KEY` is missing or mistyped:**
+
+1. `supabase_secret_key` resolves to `None`
+2. `SupabaseAuthAdmin.configured` is `False`, so it returns `False` without
+   making any HTTP call
+3. the admin route swallows nothing — it reports `claimUpdated: false`
+4. the **database row updates to `EDITOR`** while the Supabase JWT still says
+   `STUDENT` until the token expires
+
+The promotion appears to succeed and does not. This is the same defect Phase 4
+fixed in code; the same failure can be reintroduced by a typo in a dashboard.
+**Verify it with the `claimUpdated` check in `PRODUCTION_CHECKLIST.md` §5
+before go-live** — it is a 30-second test for a day-one silent authorization
+failure.
 | `STORAGE_BUCKET` | blueprint | e.g. `question-pdfs` |
 | ⚠️ `RAZORPAY_WEBHOOK_SECRET` | Razorpay dashboard | **see Phase C** |
 

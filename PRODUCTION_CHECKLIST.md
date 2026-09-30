@@ -106,6 +106,13 @@ Operator: ____________________  Date: ____________  Domain: ____________________
 - [ ] `pdftoppm -v` succeeds in the image
 - [ ] `/health` → 200
 - [ ] ⚠️ `./scripts/smoke_test.sh https://<domain>` → **10 passed, 0 failed**, exit **0**
+- [ ] ⚠️ **Admin claim sync verification** — `PATCH /api/v1/admin/users/{user_id}`
+      with a new role, and confirm the response contains
+      **`"claimUpdated": true`**.
+      If it is **`false`**, `SUPABASE_SECRET_KEY` is missing or mistyped: the
+      database row changes but the Supabase claim does not, silently. The app
+      runs `extra="ignore"`, so a wrongly-named variable produces **no error at
+      all** — this check is the only way to know. See Runbook §4.2.
 - [ ] ⚠️ **One complete test-mode payment**: order created → webhook received →
       subscription **ACTIVE** in the database
       (this is the only check that proves the payment path works; everything
